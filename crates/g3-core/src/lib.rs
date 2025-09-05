@@ -1,10 +1,11 @@
-use g3_providers::{ProviderRegistry, CompletionRequest, Message, MessageRole};
+use anyhow::Result;
 use g3_config::Config;
 use g3_execution::CodeExecutor;
-use anyhow::Result;
-use serde::{Serialize, Deserialize};
+use g3_providers::{CompletionRequest, Message, MessageRole, ProviderRegistry};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tracing::field::debug;
 use tracing::info;
 
 pub struct Agent {
@@ -52,7 +53,7 @@ pub struct CodeMetrics {
 impl Agent {
     pub async fn new(config: Config) -> Result<Self> {
         let mut providers = ProviderRegistry::new();
-        
+
         // Register providers based on configuration
         if let Some(openai_config) = &config.providers.openai {
             let openai_provider = crate::providers::openai::OpenAIProvider::new(
@@ -62,7 +63,7 @@ impl Agent {
             )?;
             providers.register(openai_provider);
         }
-        
+
         if let Some(anthropic_config) = &config.providers.anthropic {
             let anthropic_provider = crate::providers::anthropic::AnthropicProvider::new(
                 anthropic_config.api_key.clone(),
@@ -70,19 +71,19 @@ impl Agent {
             )?;
             providers.register(anthropic_provider);
         }
-        
+
         // Set default provider
         providers.set_default(&config.providers.default_provider)?;
-        
+
         Ok(Self { providers, config })
     }
-    
+
     pub async fn analyze(&self, path: &str) -> Result<AnalysisResult> {
         info!("Analyzing path: {}", path);
-        
+
         let content = self.read_file_or_directory(path)?;
         let provider = self.providers.get(None)?;
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -93,16 +94,16 @@ impl Agent {
                 content: format!("Please analyze this code:\n\n{}", content),
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.1),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
-        
+
         // For now, return a simplified analysis
         // In a real implementation, we'd parse the LLM response into structured data
         Ok(AnalysisResult {
@@ -116,12 +117,12 @@ impl Agent {
             },
         })
     }
-    
+
     pub async fn generate(&self, description: &str) -> Result<String> {
         info!("Generating code for: {}", description);
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -132,24 +133,24 @@ impl Agent {
                 content: description.to_string(),
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.2),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
+
     pub async fn review(&self, path: &str) -> Result<String> {
         info!("Reviewing path: {}", path);
-        
+
         let content = self.read_file_or_directory(path)?;
         let provider = self.providers.get(None)?;
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -160,33 +161,62 @@ impl Agent {
                 content: format!("Please review this code:\n\n{}", content),
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.1),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
-    pub async fn execute_task(&self, description: &str, language: Option<&str>, _auto_execute: bool) -> Result<String> {
-        self.execute_task_with_options(description, language, false, false, false).await
+
+    pub async fn execute_task(
+        &self,
+        description: &str,
+        language: Option<&str>,
+        _auto_execute: bool,
+    ) -> Result<String> {
+        self.execute_task_with_options(description, language, false, false, false)
+            .await
     }
-    
-    pub async fn execute_task_with_options(&self, description: &str, language: Option<&str>, _auto_execute: bool, show_prompt: bool, show_code: bool) -> Result<String> {
-        self.execute_task_with_timing(description, language, _auto_execute, show_prompt, show_code, false).await
+
+    pub async fn execute_task_with_options(
+        &self,
+        description: &str,
+        language: Option<&str>,
+        _auto_execute: bool,
+        show_prompt: bool,
+        show_code: bool,
+    ) -> Result<String> {
+        self.execute_task_with_timing(
+            description,
+            language,
+            _auto_execute,
+            show_prompt,
+            show_code,
+            false,
+        )
+        .await
     }
-    
-    pub async fn execute_task_with_timing(&self, description: &str, language: Option<&str>, _auto_execute: bool, show_prompt: bool, show_code: bool, show_timing: bool) -> Result<String> {
+
+    pub async fn execute_task_with_timing(
+        &self,
+        description: &str,
+        language: Option<&str>,
+        _auto_execute: bool,
+        show_prompt: bool,
+        show_code: bool,
+        show_timing: bool,
+    ) -> Result<String> {
         info!("Executing task: {}", description);
-        
+
         let total_start = Instant::now();
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let system_prompt = format!(
             "You are G3, a code-first AI agent. Your goal is to solve problems by writing and executing code autonomously.
 
@@ -210,13 +240,13 @@ Format your response as:
 [code]
 ```
 Then execute it and show the output.",
-            if let Some(lang) = language { 
-                format!(" (prefer {})", lang) 
-            } else { 
-                " based on the task type".to_string() 
+            if let Some(lang) = language {
+                format!(" (prefer {})", lang)
+            } else {
+                " based on the task type".to_string()
             }
         );
-        
+
         if show_prompt {
             println!("🔍 System Prompt:");
             println!("================");
@@ -224,7 +254,7 @@ Then execute it and show the output.",
             println!("================");
             println!();
         }
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -235,27 +265,36 @@ Then execute it and show the output.",
                 content: format!("Task: {}", description),
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.2),
             stream: false,
         };
-        
+
         // Time the LLM call
         let llm_start = Instant::now();
         let response = provider.complete(request).await?;
         let llm_duration = llm_start.elapsed();
-        
+
+        // Log the LLM response before passing to CodeExecutor
+        // debug!(
+        //     "LLM Response received ({} chars): {}\n=== END ===",
+        //     response.content.len(),
+        //     response.content
+        // );
+
         // Time the code execution
         let exec_start = Instant::now();
         let executor = CodeExecutor::new();
-        let result = executor.execute_from_response_with_options(&response.content, show_code).await?;
+        let result = executor
+            .execute_from_response_with_options(&response.content, show_code)
+            .await?;
         let exec_duration = exec_start.elapsed();
-        
+
         let total_duration = total_start.elapsed();
-        
+
         if show_timing {
             let timing_summary = format!(
                 "\n⏱️  Task Summary:\n   LLM call: {}\n   Code execution: {}\n   Total time: {}",
@@ -268,10 +307,10 @@ Then execute it and show the output.",
             Ok(result)
         }
     }
-    
+
     fn format_duration(duration: Duration) -> String {
         let total_ms = duration.as_millis();
-        
+
         if total_ms < 1000 {
             format!("{}ms", total_ms)
         } else if total_ms < 60_000 {
@@ -283,12 +322,12 @@ Then execute it and show the output.",
             format!("{}m {:.1}s", minutes, remaining_seconds)
         }
     }
-    
+
     pub async fn create_automation(&self, workflow: &str) -> Result<String> {
         info!("Creating automation for: {}", workflow);
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -299,29 +338,29 @@ Then execute it and show the output.",
                 content: format!("Create an automation script for: {}", workflow),
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.1),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
+
     pub async fn process_data(&self, operation: &str, input_file: Option<&str>) -> Result<String> {
         info!("Processing data: {}", operation);
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let context = if let Some(file) = input_file {
             format!("Operation: {}\nInput file: {}", operation, file)
         } else {
             format!("Operation: {}", operation)
         };
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -332,29 +371,29 @@ Then execute it and show the output.",
                 content: context,
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.1),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
+
     pub async fn execute_web_task(&self, task: &str, url: Option<&str>) -> Result<String> {
         info!("Executing web task: {}", task);
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let context = if let Some(url) = url {
             format!("Task: {}\nURL: {}", task, url)
         } else {
             format!("Task: {}", task)
         };
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -365,29 +404,33 @@ Then execute it and show the output.",
                 content: context,
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.2),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
-    pub async fn execute_file_operation(&self, operation: &str, path: Option<&str>) -> Result<String> {
+
+    pub async fn execute_file_operation(
+        &self,
+        operation: &str,
+        path: Option<&str>,
+    ) -> Result<String> {
         info!("Executing file operation: {}", operation);
-        
+
         let provider = self.providers.get(None)?;
-        
+
         let context = if let Some(path) = path {
             format!("Operation: {}\nPath: {}", operation, path)
         } else {
             format!("Operation: {}", operation)
         };
-        
+
         let messages = vec![
             Message {
                 role: MessageRole::System,
@@ -398,21 +441,21 @@ Then execute it and show the output.",
                 content: context,
             },
         ];
-        
+
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
             temperature: Some(0.1),
             stream: false,
         };
-        
+
         let response = provider.complete(request).await?;
         Ok(response.content)
     }
-    
+
     fn read_file_or_directory(&self, path: &str) -> Result<String> {
         let path = Path::new(path);
-        
+
         if path.is_file() {
             Ok(std::fs::read_to_string(path)?)
         } else if path.is_dir() {
@@ -424,23 +467,27 @@ Then execute it and show the output.",
             anyhow::bail!("Path does not exist: {}", path.display())
         }
     }
-    
+
     fn read_directory_recursive(&self, dir: &Path, content: &mut String) -> Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if path.is_file() {
                 if let Some(ext) = path.extension() {
                     // Only read common code files
-                    if matches!(ext.to_str(), Some("rs" | "py" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h")) {
+                    if matches!(
+                        ext.to_str(),
+                        Some("rs" | "py" | "js" | "ts" | "go" | "java" | "cpp" | "c" | "h")
+                    ) {
                         content.push_str(&format!("\n--- {} ---\n", path.display()));
                         if let Ok(file_content) = std::fs::read_to_string(&path) {
                             content.push_str(&file_content);
                         }
                     }
                 }
-            } else if path.is_dir() && !path.file_name().unwrap().to_str().unwrap().starts_with('.') {
+            } else if path.is_dir() && !path.file_name().unwrap().to_str().unwrap().starts_with('.')
+            {
                 self.read_directory_recursive(&path, content)?;
             }
         }
@@ -458,13 +505,21 @@ impl std::fmt::Display for AnalysisResult {
         writeln!(f)?;
         writeln!(f, "Metrics:")?;
         writeln!(f, "- Lines of Code: {}", self.metrics.lines_of_code)?;
-        writeln!(f, "- Complexity Score: {:.2}", self.metrics.complexity_score)?;
-        writeln!(f, "- Maintainability Index: {:.2}", self.metrics.maintainability_index)?;
+        writeln!(
+            f,
+            "- Complexity Score: {:.2}",
+            self.metrics.complexity_score
+        )?;
+        writeln!(
+            f,
+            "- Maintainability Index: {:.2}",
+            self.metrics.maintainability_index
+        )?;
         Ok(())
     }
 }
 
 pub mod providers {
-    pub mod openai;
     pub mod anthropic;
+    pub mod openai;
 }

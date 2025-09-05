@@ -29,6 +29,7 @@ impl CodeExecutor {
     
     /// Extract code blocks from LLM response and execute them with UI options
     pub async fn execute_from_response_with_options(&self, response: &str, show_code: bool) -> Result<String> {
+        debug!("CodeExecutor received response ({} chars): {}", response.len(), response);
         let code_blocks = self.extract_code_blocks(response)?;
         
         if code_blocks.is_empty() {
@@ -89,8 +90,10 @@ impl CodeExecutor {
     
     /// Extract code blocks from markdown-formatted text
     fn extract_code_blocks(&self, text: &str) -> Result<Vec<(String, String)>> {
-        let re = Regex::new(r"```(\w+)?\n(.*?)```")?;
+        let re = Regex::new(r"(?s)```(\w+)?\n(.*?)```")?;
         let mut blocks = Vec::new();
+        
+        debug!("Extracting code blocks from text: {}", text);
         
         for cap in re.captures_iter(text) {
             let language = cap.get(1)
@@ -98,11 +101,14 @@ impl CodeExecutor {
                 .unwrap_or_else(|| "bash".to_string()); // Default to bash
             let code = cap.get(2).map(|m| m.as_str()).unwrap_or("").trim();
             
+            debug!("Found code block - language: '{}', code: '{}'", language, code);
+            
             if !code.is_empty() {
                 blocks.push((language, code.to_string()));
             }
         }
         
+        debug!("Total code blocks found: {}", blocks.len());
         Ok(blocks)
     }
     
