@@ -1,0 +1,26 @@
+# Example configuration file for G3
+# Copy to ~/.config/g3/config.toml and customize
+
+[providers]
+default_provider = "openai"
+
+[providers.openai]
+# Get your API key from https://platform.openai.com/api-keys
+api_key = "sk-your-openai-api-key-here"
+model = "gpt-4"
+# Optional: custom base URL for OpenAI-compatible APIs
+# base_url = "https://api.openai.com/v1"
+max_tokens = 2048
+temperature = 0.1
+
+[providers.anthropic]
+# Get your API key from https://console.anthropic.com/
+api_key = "your-anthropic-api-key-here"
+model = "claude-3-sonnet-20240229"
+max_tokens = 2048
+temperature = 0.1
+
+[agent]
+max_context_length = 8192
+enable_streaming = true
+timeout_seconds = 60
