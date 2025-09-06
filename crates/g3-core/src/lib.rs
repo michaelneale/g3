@@ -72,6 +72,19 @@ impl Agent {
             providers.register(anthropic_provider);
         }
 
+        if let Some(embedded_config) = &config.providers.embedded {
+            let embedded_provider = crate::providers::embedded::EmbeddedProvider::new(
+                embedded_config.model_path.clone(),
+                embedded_config.model_type.clone(),
+                embedded_config.context_length,
+                embedded_config.max_tokens,
+                embedded_config.temperature,
+                embedded_config.gpu_layers,
+                embedded_config.threads,
+            )?;
+            providers.register(embedded_provider);
+        }
+
         // Set default provider
         providers.set_default(&config.providers.default_provider)?;
 
@@ -522,4 +535,5 @@ impl std::fmt::Display for AnalysisResult {
 pub mod providers {
     pub mod anthropic;
     pub mod openai;
+    pub mod embedded;
 }

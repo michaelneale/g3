@@ -18,3 +18,5 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 async-trait = "0.1"
 tokio-stream = "0.1"
+llama_cpp = { version = "0.3.2", features = ["metal"] }
+shellexpand = "3.1"

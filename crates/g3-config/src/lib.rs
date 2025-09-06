@@ -12,6 +12,7 @@ pub struct Config {
 pub struct ProvidersConfig {
     pub openai: Option<OpenAIConfig>,
     pub anthropic: Option<AnthropicConfig>,
+    pub embedded: Option<EmbeddedConfig>,
     pub default_provider: String,
 }
 
@@ -33,6 +34,17 @@ pub struct AnthropicConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedConfig {
+    pub model_path: String,
+    pub model_type: String, // e.g., "llama", "mistral", "codellama"
+    pub context_length: Option<u32>,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub gpu_layers: Option<u32>, // Number of layers to offload to GPU
+    pub threads: Option<u32>,    // Number of CPU threads to use
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub max_context_length: usize,
     pub enable_streaming: bool,
@@ -45,6 +57,7 @@ impl Default for Config {
             providers: ProvidersConfig {
                 openai: None,
                 anthropic: None,
+                embedded: None,
                 default_provider: "openai".to_string(),
             },
             agent: AgentConfig {

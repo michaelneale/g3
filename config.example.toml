@@ -2,7 +2,7 @@
 # Copy to ~/.config/g3/config.toml and customize
 
 [providers]
-default_provider = "openai"
+default_provider = "embedded"
 
 [providers.openai]
 # Get your API key from https://platform.openai.com/api-keys
@@ -19,6 +19,18 @@ api_key = "your-anthropic-api-key-here"
 model = "claude-3-sonnet-20240229"
 max_tokens = 2048
 temperature = 0.1
+
+[providers.embedded]
+# Path to your GGUF model file
+model_path = "~/.cache/g3/models/codellama-7b-instruct.Q4_K_M.gguf"
+model_type = "codellama"
+context_length = 16384  # Use CodeLlama's full context capability
+max_tokens = 2048  # Default fallback, but will be calculated dynamically
+temperature = 0.1
+# Number of layers to offload to GPU (0 for CPU only)
+gpu_layers = 32
+# Number of CPU threads to use
+threads = 8
 
 [agent]
 max_context_length = 8192

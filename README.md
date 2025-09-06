@@ -20,7 +20,8 @@ G3 will write the appropriate scripts (Python, Bash, JavaScript, etc.) and can e
 - **Code-First Approach**: Always tries to solve problems with executable code
 - **Multi-Language Support**: Generates Python, Bash, JavaScript, Rust, and more
 - **Modular Architecture**: Clean separation between CLI, core engine, and LLM providers
-- **Multiple LLM Providers**: Support for OpenAI, Anthropic, and extensible to other providers
+- **Multiple LLM Providers**: Support for OpenAI, Anthropic, and embedded open-weights models
+- **Local Model Support**: Run completely offline with embedded GGUF models via llama.cpp
 - **Interactive Mode**: Chat with the AI and watch it solve problems in real-time
 - **Task Automation**: Create reusable automation scripts
 
@@ -33,6 +34,8 @@ cargo install --path .
 ## Configuration
 
 Create a configuration file at `~/.config/g3/config.toml`:
+
+### Cloud Providers
 
 ```toml
 [providers]
@@ -49,7 +52,37 @@ api_key = "your-anthropic-api-key"
 model = "claude-3-sonnet-20240229"
 max_tokens = 2048
 temperature = 0.1
+```
 
+### Local Embedded Models
+
+For completely offline operation with open-weights models:
+
+```toml
+[providers]
+default_provider = "embedded"
+
+[providers.embedded]
+# Path to your GGUF model file
+model_path = "~/.cache/g3/models/codellama-7b-instruct.Q4_K_M.gguf"
+model_type = "codellama"
+context_length = 4096
+max_tokens = 2048
+temperature = 0.1
+# Number of layers to offload to GPU (0 for CPU only)
+gpu_layers = 32
+# Number of CPU threads to use
+threads = 8
+```
+
+**Getting Models**: Download GGUF models from [Hugging Face](https://huggingface.co/models?library=gguf) (search for "GGUF"). Popular options:
+- [CodeLlama 7B Instruct](https://huggingface.co/TheBloke/CodeLlama-7B-Instruct-GGUF)
+- [Llama 2 7B Chat](https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGUF)  
+- [Mistral 7B Instruct](https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.1-GGUF)
+
+### Agent Settings
+
+```toml
 [agent]
 max_context_length = 8192
 enable_streaming = true
