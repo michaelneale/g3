@@ -3,6 +3,8 @@ use g3_core::Agent;
 use g3_config::Config;
 use anyhow::Result;
 use tracing::{info, error};
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 
 #[derive(Parser)]
 #[command(name = "g3")]
@@ -70,31 +72,64 @@ async fn run_interactive(agent: Agent, show_prompt: bool, show_code: bool) -> Re
     println!("🤖 G3 AI Coding Agent - Interactive Mode");
     println!("I solve problems by writing and executing code. Tell me what you need to accomplish!");
     println!();
-    println!("Type 'exit' or 'quit' to exit");
+    println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
     println!();
     
+    // Initialize rustyline editor with history
+    let mut rl = DefaultEditor::new()?;
+    
+    // Try to load history from a file in the user's home directory
+    let history_file = dirs::home_dir()
+        .map(|mut path| {
+            path.push(".g3_history");
+            path
+        });
+    
+    if let Some(ref history_path) = history_file {
+        let _ = rl.load_history(history_path);
+    }
+    
     loop {
-        print!("g3> ");
-        use std::io::{self, Write};
-        io::stdout().flush()?;
-        
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        
-        let input = input.trim();
-        if input == "exit" || input == "quit" {
-            break;
+        let readline = rl.readline("g3> ");
+        match readline {
+            Ok(line) => {
+                let input = line.trim();
+                
+                if input == "exit" || input == "quit" {
+                    break;
+                }
+                
+                if input.is_empty() {
+                    continue;
+                }
+                
+                // Add to history
+                rl.add_history_entry(input)?;
+                
+                // Execute task (code-first approach)
+                match agent.execute_task_with_timing(input, None, false, show_prompt, show_code, true).await {
+                    Ok(response) => println!("{}", response),
+                    Err(e) => error!("Error: {}", e),
+                }
+            },
+            Err(ReadlineError::Interrupted) => {
+                println!("CTRL-C");
+                continue;
+            },
+            Err(ReadlineError::Eof) => {
+                println!("CTRL-D");
+                break;
+            },
+            Err(err) => {
+                error!("Error: {:?}", err);
+                break;
+            }
         }
-        
-        if input.is_empty() {
-            continue;
-        }
-        
-        // Execute task (code-first approach)
-        match agent.execute_task_with_timing(input, None, false, show_prompt, show_code, true).await {
-            Ok(response) => println!("{}", response),
-            Err(e) => error!("Error: {}", e),
-        }
+    }
+    
+    // Save history before exiting
+    if let Some(ref history_path) = history_file {
+        let _ = rl.save_history(history_path);
     }
     
     println!("👋 Goodbye!");
