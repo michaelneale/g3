@@ -7,6 +7,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 use tracing::field::debug;
 use tracing::info;
+use tokio_util::sync::CancellationToken;
 
 pub struct Agent {
     providers: ProviderRegistry,
@@ -92,6 +93,30 @@ impl Agent {
         show_code: bool,
         show_timing: bool,
     ) -> Result<String> {
+        // Create a cancellation token that never cancels for backward compatibility
+        let cancellation_token = CancellationToken::new();
+        self.execute_task_with_timing_cancellable(
+            description,
+            language,
+            _auto_execute,
+            show_prompt,
+            show_code,
+            show_timing,
+            cancellation_token,
+        )
+        .await
+    }
+
+    pub async fn execute_task_with_timing_cancellable(
+        &self,
+        description: &str,
+        language: Option<&str>,
+        _auto_execute: bool,
+        show_prompt: bool,
+        show_code: bool,
+        show_timing: bool,
+        cancellation_token: CancellationToken,
+    ) -> Result<String> {
         info!("Executing task: {}", description);
 
         let total_start = Instant::now();
@@ -154,17 +179,25 @@ with nothing afterwards.",
             stream: false,
         };
 
-        // Time the LLM call
+        // Time the LLM call with cancellation support
         let llm_start = Instant::now();
-        let response = provider.complete(request).await?;
+        let response = tokio::select! {
+            result = provider.complete(request) => result?,
+            _ = cancellation_token.cancelled() => {
+                return Err(anyhow::anyhow!("Operation cancelled by user"));
+            }
+        };
         let llm_duration = llm_start.elapsed();
 
-        // Time the code execution
+        // Time the code execution with cancellation support
         let exec_start = Instant::now();
         let executor = CodeExecutor::new();
-        let result = executor
-            .execute_from_response_with_options(&response.content, show_code)
-            .await?;
+        let result = tokio::select! {
+            result = executor.execute_from_response_with_options(&response.content, show_code) => result?,
+            _ = cancellation_token.cancelled() => {
+                return Err(anyhow::anyhow!("Operation cancelled by user"));
+            }
+        };
         let exec_duration = exec_start.elapsed();
 
         let total_duration = total_start.elapsed();

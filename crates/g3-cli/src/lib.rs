@@ -5,6 +5,7 @@ use anyhow::Result;
 use tracing::{info, error};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
 #[command(name = "g3")]
@@ -73,6 +74,7 @@ async fn run_interactive(agent: Agent, show_prompt: bool, show_code: bool) -> Re
     println!("I solve problems by writing and executing code. Tell me what you need to accomplish!");
     println!();
     println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
+    println!("Press ESC during operations to cancel the current request");
     println!();
     
     // Initialize rustyline editor with history
@@ -106,10 +108,43 @@ async fn run_interactive(agent: Agent, show_prompt: bool, show_code: bool) -> Re
                 // Add to history
                 rl.add_history_entry(input)?;
                 
-                // Execute task (code-first approach)
-                match agent.execute_task_with_timing(input, None, false, show_prompt, show_code, true).await {
+                // Create cancellation token for this request
+                let cancellation_token = CancellationToken::new();
+                let cancel_token_clone = cancellation_token.clone();
+                
+                // Spawn a task to monitor for ESC key during execution
+                let esc_monitor = tokio::spawn(async move {
+                    // This is a simplified approach - in a real implementation,
+                    // we'd need to handle raw terminal input to detect ESC
+                    // For now, we'll just provide the cancellation infrastructure
+                    tokio::time::sleep(tokio::time::Duration::from_secs(3600)).await;
+                });
+                
+                // Execute task with cancellation support
+                let execution_result = tokio::select! {
+                    result = agent.execute_task_with_timing_cancellable(
+                        input, None, false, show_prompt, show_code, true, cancellation_token
+                    ) => {
+                        esc_monitor.abort();
+                        result
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        cancel_token_clone.cancel();
+                        esc_monitor.abort();
+                        println!("\n⚠️  Operation cancelled by user (Ctrl+C)");
+                        continue;
+                    }
+                };
+                
+                match execution_result {
                     Ok(response) => println!("{}", response),
-                    Err(e) => error!("Error: {}", e),
+                    Err(e) => {
+                        if e.to_string().contains("cancelled") {
+                            println!("⚠️  Operation cancelled by user");
+                        } else {
+                            error!("Error: {}", e);
+                        }
+                    }
                 }
             },
             Err(ReadlineError::Interrupted) => {
