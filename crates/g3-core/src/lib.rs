@@ -5,9 +5,9 @@ use g3_providers::{CompletionRequest, Message, MessageRole, ProviderRegistry};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 use tracing::field::debug;
 use tracing::info;
-use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone)]
 pub struct ContextWindow {
@@ -97,8 +97,8 @@ impl Agent {
         // Initialize context window with configured max context length
         let context_window = ContextWindow::new(config.agent.max_context_length as u32);
 
-        Ok(Self { 
-            providers, 
+        Ok(Self {
+            providers,
             config,
             context_window,
         })
@@ -173,14 +173,15 @@ impl Agent {
         let provider = self.providers.get(None)?;
 
         let system_prompt = format!(
-            "You are G3, a code-first AI agent. Your goal is to solve problems by writing and executing code autonomously.
+            "You are G3, a code-first AI agent. Your goal is to solve problems by writing code that completes the desired task.
 
 When given a task:
 1. Analyze what needs to be done
-2. Choose the most appropriate programming language{}
-3. Include any necessary imports/dependencies
-4. Add error handling where appropriate
-5. EXECUTE the code immediately to solve the user's problem
+2. Rate the difficulty of the task from 1 (easy, file operations) to 10 (difficult, build complex applications like Firefox)
+3. Choose the most appropriate programming language{}
+4. Include any necessary imports/dependencies
+5. Add error handling where appropriate
+6. Generate code to complete the task, or ask for more details, but no other output
 
 Prefer these languages:
 - Bash/Shell: File operations, system administration, simple tasks
@@ -189,7 +190,8 @@ Prefer these languages:
 
 Only use Rust/Python when you need libraries or complex logic that bash can't handle easily.
 
-Format your response as:
+Format your code response in markdown backticks as follows:
+difficulty rating: [X]
 ```[language]
 [code]
 ```

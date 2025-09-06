@@ -90,21 +90,41 @@ impl CodeExecutor {
     
     /// Extract code blocks from markdown-formatted text
     fn extract_code_blocks(&self, text: &str) -> Result<Vec<(String, String)>> {
-        let re = Regex::new(r"(?s)```(\w+)?\n(.*?)```")?;
         let mut blocks = Vec::new();
         
         debug!("Extracting code blocks from text: {}", text);
         
-        for cap in re.captures_iter(text) {
+        // Pattern 1: Standard markdown format ```language\ncode```
+        let markdown_re = Regex::new(r"(?s)```(\w+)?\n(.*?)```")?;
+        for cap in markdown_re.captures_iter(text) {
             let language = cap.get(1)
                 .map(|m| m.as_str().to_lowercase())
                 .unwrap_or_else(|| "bash".to_string()); // Default to bash
             let code = cap.get(2).map(|m| m.as_str()).unwrap_or("").trim();
             
-            debug!("Found code block - language: '{}', code: '{}'", language, code);
+            debug!("Found markdown code block - language: '{}', code: '{}'", language, code);
             
             if !code.is_empty() {
                 blocks.push((language, code.to_string()));
+            }
+        }
+        
+        // Pattern 2: Bracket format [Language]code[/Language]
+        let bracket_re = Regex::new(r"(?s)\[(\w+)\]\s*(.*?)\s*\[/(\w+)\]")?;
+        for cap in bracket_re.captures_iter(text) {
+            let open_lang = cap.get(1).map(|m| m.as_str()).unwrap_or("");
+            let close_lang = cap.get(3).map(|m| m.as_str()).unwrap_or("");
+            
+            // Only match if opening and closing tags are the same (case insensitive)
+            if open_lang.to_lowercase() == close_lang.to_lowercase() {
+                let language = open_lang.to_lowercase();
+                let code = cap.get(2).map(|m| m.as_str()).unwrap_or("").trim();
+                
+                debug!("Found bracket code block - language: '{}', code: '{}'", language, code);
+                
+                if !code.is_empty() {
+                    blocks.push((language, code.to_string()));
+                }
             }
         }
         
