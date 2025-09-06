@@ -9,9 +9,51 @@ use tracing::field::debug;
 use tracing::info;
 use tokio_util::sync::CancellationToken;
 
+#[derive(Debug, Clone)]
+pub struct ContextWindow {
+    pub used_tokens: u32,
+    pub total_tokens: u32,
+    pub conversation_history: Vec<Message>,
+}
+
+impl ContextWindow {
+    pub fn new(total_tokens: u32) -> Self {
+        Self {
+            used_tokens: 0,
+            total_tokens,
+            conversation_history: Vec::new(),
+        }
+    }
+
+    pub fn add_message(&mut self, message: Message) {
+        // Simple token estimation: ~4 characters per token
+        let estimated_tokens = (message.content.len() as f32 / 4.0).ceil() as u32;
+        self.used_tokens += estimated_tokens;
+        self.conversation_history.push(message);
+    }
+
+    pub fn update_usage(&mut self, usage: &g3_providers::Usage) {
+        // Update with actual token usage from the provider
+        self.used_tokens = usage.total_tokens;
+    }
+
+    pub fn percentage_used(&self) -> f32 {
+        if self.total_tokens == 0 {
+            0.0
+        } else {
+            (self.used_tokens as f32 / self.total_tokens as f32) * 100.0
+        }
+    }
+
+    pub fn remaining_tokens(&self) -> u32 {
+        self.total_tokens.saturating_sub(self.used_tokens)
+    }
+}
+
 pub struct Agent {
     providers: ProviderRegistry,
     config: Config,
+    context_window: ContextWindow,
 }
 
 impl Agent {
@@ -52,11 +94,18 @@ impl Agent {
         // Set default provider
         providers.set_default(&config.providers.default_provider)?;
 
-        Ok(Self { providers, config })
+        // Initialize context window with configured max context length
+        let context_window = ContextWindow::new(config.agent.max_context_length as u32);
+
+        Ok(Self { 
+            providers, 
+            config,
+            context_window,
+        })
     }
 
     pub async fn execute_task(
-        &self,
+        &mut self,
         description: &str,
         language: Option<&str>,
         _auto_execute: bool,
@@ -66,7 +115,7 @@ impl Agent {
     }
 
     pub async fn execute_task_with_options(
-        &self,
+        &mut self,
         description: &str,
         language: Option<&str>,
         _auto_execute: bool,
@@ -85,7 +134,7 @@ impl Agent {
     }
 
     pub async fn execute_task_with_timing(
-        &self,
+        &mut self,
         description: &str,
         language: Option<&str>,
         _auto_execute: bool,
@@ -108,7 +157,7 @@ impl Agent {
     }
 
     pub async fn execute_task_with_timing_cancellable(
-        &self,
+        &mut self,
         description: &str,
         language: Option<&str>,
         _auto_execute: bool,
@@ -161,16 +210,21 @@ with nothing afterwards.",
             println!();
         }
 
-        let messages = vec![
-            Message {
-                role: MessageRole::System,
-                content: system_prompt,
-            },
-            Message {
-                role: MessageRole::User,
-                content: format!("Task: {}", description),
-            },
-        ];
+        // Add system message to context window
+        let system_message = Message {
+            role: MessageRole::System,
+            content: system_prompt.clone(),
+        };
+        self.context_window.add_message(system_message.clone());
+
+        // Add user message to context window
+        let user_message = Message {
+            role: MessageRole::User,
+            content: format!("Task: {}", description),
+        };
+        self.context_window.add_message(user_message.clone());
+
+        let messages = vec![system_message, user_message];
 
         let request = CompletionRequest {
             messages,
@@ -188,6 +242,16 @@ with nothing afterwards.",
             }
         };
         let llm_duration = llm_start.elapsed();
+
+        // Update context window with actual token usage
+        self.context_window.update_usage(&response.usage);
+
+        // Add assistant response to context window
+        let assistant_message = Message {
+            role: MessageRole::Assistant,
+            content: response.content.clone(),
+        };
+        self.context_window.add_message(assistant_message);
 
         // Time the code execution with cancellation support
         let exec_start = Instant::now();
@@ -213,6 +277,10 @@ with nothing afterwards.",
         } else {
             Ok(result)
         }
+    }
+
+    pub fn get_context_window(&self) -> &ContextWindow {
+        &self.context_window
     }
 
     fn format_duration(duration: Duration) -> String {

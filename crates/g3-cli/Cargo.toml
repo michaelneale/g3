@@ -17,3 +17,4 @@ serde_json = { workspace = true }
 rustyline = "17.0.1"
 dirs = "5.0"
 tokio-util = "0.7"
+indicatif = "0.17"
