@@ -234,7 +234,11 @@ impl Agent {
             tools, and can interact with multiple at once. When you want to perform an action, use 'I' as the pronoun.
 
 # Available Tools
-- shell:
+
+- name: shell
+  type: function
+  usage: shell [command]
+  description: \"
     Execute a command in the shell.
 
     This will return the output and error concatenated into a single string, as
@@ -249,23 +253,14 @@ impl Agent {
 
     Multiple commands: Use ; or && to chain commands, avoid newlines
     Pathnames: Use absolute paths and avoid cd unless explicitly requested
+    \"
 
-    Usage:
-    - Call the `shell` tool with the desired bash/shell commands.
-
-- search:
-    Search the web for information about any topic.
-
-- final_output:
+- name: final_output
+  type: function
+  usage: final_output [summary]
+  description: \"
     This tool signals the final output for a user in a conversation and MUST be used for the final message to the user. You must
-    pass in a detailed summary of the work done to this tool call.
-
-    Purpose:
-    - Collects the final output for a user
-    - Provides clear validation feedback when output isn't valid
-
-    Usage:
-    - Call the `final_output` tool with a summary of the work performed.
+    pass in a detailed summary of the work done so far.\"
 
 # Response Guidelines
 - Use Markdown formatting for all responses.
@@ -278,12 +273,10 @@ impl Agent {
 
 IMPORTANT INSTRUCTIONS:
 
-Please keep going until the user's query is completely resolved, before ending your turn and yielding back to the user.
-Only terminate your turn when you are sure that the problem is solved.
-
-If you are not sure about file content or codebase structure, or other information pertaining to the user's request,
-use your tools to read files and gather the relevant information: do NOT guess or make up an answer. It is important
-you use tools that can assist with providing the right context.
+Break down your task into smaller steps and do one step and tool call at a time.
+Do not try to use multiple tools at once.
+**After you get the tool result back, consider the result and then proceed to do
+the next step and tool call if required.**
 ");
 
         if show_prompt {
@@ -319,7 +312,7 @@ you use tools that can assist with providing the right context.
 
         // Time the LLM call with cancellation support and streaming
         let llm_start = Instant::now();
-        let response_content = tokio::select! {
+        let (response_content, think_time) = tokio::select! {
             result = self.stream_completion(request) => result?,
             _ = cancellation_token.cancelled() => {
                 return Err(anyhow::anyhow!("Operation cancelled by user"));
@@ -357,8 +350,9 @@ you use tools that can assist with providing the right context.
 
         if show_timing {
             let timing_summary = format!(
-                "\n💭 {} | ⚡️ {}",
+                "\n⏱️ {} | 💭 {} | ⚡️ {}",
                 Self::format_duration(llm_duration),
+                Self::format_duration(think_time),
                 Self::format_duration(exec_duration)
             );
             Ok(format!("{}\n{}", result, timing_summary))
@@ -371,13 +365,16 @@ you use tools that can assist with providing the right context.
         &self.context_window
     }
 
-    async fn stream_completion(&self, request: CompletionRequest) -> Result<String> {
+    async fn stream_completion(&self, request: CompletionRequest) -> Result<(String, Duration)> {
         use tokio_stream::StreamExt;
 
         let provider = self.providers.get(None)?;
         let mut stream = provider.stream(request).await?;
 
         let mut full_content = String::new();
+        let mut first_token_time: Option<Duration> = None;
+        let stream_start = Instant::now();
+
         print!("🤖 "); // Start the response indicator
         use std::io::{self, Write};
         io::stdout().flush()?;
@@ -385,6 +382,11 @@ you use tools that can assist with providing the right context.
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    // Record time to first token
+                    if first_token_time.is_none() && !chunk.content.is_empty() {
+                        first_token_time = Some(stream_start.elapsed());
+                    }
+
                     print!("{}", chunk.content);
                     io::stdout().flush()?;
                     full_content.push_str(&chunk.content);
@@ -401,7 +403,8 @@ you use tools that can assist with providing the right context.
         }
 
         println!(); // New line after streaming completes
-        Ok(full_content)
+        let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
+        Ok((full_content, ttft))
     }
 
     fn format_duration(duration: Duration) -> String {
