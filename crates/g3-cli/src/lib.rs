@@ -76,8 +76,19 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
         "I solve problems by writing and executing code. Tell me what you need to accomplish!"
     );
     println!();
+
+    // Display provider and model information
+    match agent.get_provider_info() {
+        Ok((provider, model)) => {
+            println!("🔧 Provider: {} | Model: {}", provider, model);
+        }
+        Err(e) => {
+            error!("Failed to get provider info: {}", e);
+        }
+    }
+
+    println!();
     println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
-    println!("Press ESC during operations to cancel the current request");
     println!();
 
     // Initialize rustyline editor with history
