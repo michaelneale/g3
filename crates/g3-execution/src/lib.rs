@@ -133,7 +133,7 @@ impl CodeExecutor {
     }
     
     /// Execute code in the specified language
-    async fn execute_code(&self, language: &str, code: &str) -> Result<ExecutionResult> {
+    pub async fn execute_code(&self, language: &str, code: &str) -> Result<ExecutionResult> {
         match language.to_lowercase().as_str() {
             "python" | "py" => self.execute_python(code).await,
             "bash" | "shell" | "sh" => self.execute_bash(code).await,
