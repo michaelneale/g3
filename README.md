@@ -39,17 +39,17 @@ Create a configuration file at `~/.config/g3/config.toml`:
 
 ```toml
 [providers]
-default_provider = "openai"
+default_provider = "anthropic"
+
+[providers.anthropic]
+api_key = "your-anthropic-api-key"
+model = "claude-3-5-sonnet-20241022"
+max_tokens = 4096
+temperature = 0.1
 
 [providers.openai]
 api_key = "your-openai-api-key"
 model = "gpt-4"
-max_tokens = 2048
-temperature = 0.1
-
-[providers.anthropic]
-api_key = "your-anthropic-api-key"
-model = "claude-3-sonnet-20240229"
 max_tokens = 2048
 temperature = 0.1
 ```

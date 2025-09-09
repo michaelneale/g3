@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, debug};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -229,7 +229,9 @@ impl Agent {
         }
 
         // Set default provider
+        debug!("Setting default provider to: {}", config.providers.default_provider);
         providers.set_default(&config.providers.default_provider)?;
+        debug!("Default provider set successfully");
 
         // Determine context window size based on active provider
         let context_length = Self::determine_context_length(&config, &providers)?;
@@ -364,8 +366,10 @@ impl Agent {
 
         let _provider = self.providers.get(None)?;
 
-        let system_prompt = format!(
-            "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems step by step.
+        // Only add system message if this is the first interaction (empty conversation history)
+        if self.context_window.conversation_history.is_empty() {
+            let system_prompt = format!(
+                "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code.
 
 # Tool Call Format
 
@@ -381,48 +385,53 @@ The tool will execute immediately and you'll receive the result to continue with
   - Format: {{\"tool\": \"shell\", \"args\": {{\"command\": \"your_command_here\"}}}}
   - Example: {{\"tool\": \"shell\", \"args\": {{\"command\": \"ls ~/Downloads\"}}}}
 
-- **final_output**: Signal task completion
+- **final_output**: Signal task completion with a summary of work done in markdown format
   - Format: {{\"tool\": \"final_output\", \"args\": {{\"summary\": \"what_was_accomplished\"}}}}
 
 # Instructions
 
-1. Break down tasks into small steps
+1. Analyze the request and break down into smaller tasks if appropriate
 2. Execute ONE tool at a time
-3. Wait for the result before proceeding
-4. Use the actual file paths on the system
-5. End with final_output when done
+3. STOP when the original request was satisfied
+4. End with final_output when done
 
-Let's start with the first step of your task.
+# Response Guidelines
+
+- Use Markdown formatting for all responses except tool calls.
+- Whenever calling tools, use the pronoun 'I'
+
 ");
 
-        if show_prompt {
-            println!("🔍 System Prompt:");
-            println!("================");
-            println!("{}", system_prompt);
-            println!("================");
-            println!();
-        }
+            if show_prompt {
+                println!("🔍 System Prompt:");
+                println!("================");
+                println!("{}", system_prompt);
+                println!("================");
+                println!();
+            }
 
-        // Add system message to context window
-        let system_message = Message {
-            role: MessageRole::System,
-            content: system_prompt.clone(),
-        };
-        self.context_window.add_message(system_message.clone());
+            // Add system message to context window
+            let system_message = Message {
+                role: MessageRole::System,
+                content: system_prompt,
+            };
+            self.context_window.add_message(system_message);
+        }
 
         // Add user message to context window
         let user_message = Message {
             role: MessageRole::User,
             content: format!("Task: {}", description),
         };
-        self.context_window.add_message(user_message.clone());
+        self.context_window.add_message(user_message);
 
-        let messages = vec![system_message, user_message];
+        // Use the complete conversation history for the request
+        let messages = self.context_window.conversation_history.clone();
 
         let request = CompletionRequest {
             messages,
             max_tokens: Some(2048),
-            temperature: Some(0.2),
+            temperature: Some(0.1),
             stream: true, // Enable streaming
         };
 
@@ -520,12 +529,15 @@ Let's start with the first step of your task.
         &self.context_window
     }
 
-    async fn stream_completion(&self, request: CompletionRequest) -> Result<(String, Duration)> {
+    async fn stream_completion(
+        &mut self,
+        request: CompletionRequest,
+    ) -> Result<(String, Duration)> {
         self.stream_completion_with_tools(request).await
     }
 
     async fn stream_completion_with_tools(
-        &self,
+        &mut self,
         mut request: CompletionRequest,
     ) -> Result<(String, Duration)> {
         use std::io::{self, Write};
@@ -587,8 +599,34 @@ Let's start with the first step of your task.
                             first_token_time = Some(stream_start.elapsed());
                         }
 
-                        // Check for tool calls in the streaming content
-                        if let Some((tool_call, tool_end_pos)) = parser.add_chunk(&chunk.content) {
+                        // Check for tool calls - either from JSON parsing (embedded models) 
+                        // or from native tool calls (Anthropic, OpenAI, etc.)
+                        let mut detected_tool_call = None;
+                        
+                        // First check for native tool calls in the chunk
+                        if let Some(ref tool_calls) = chunk.tool_calls {
+                            debug!("Found native tool calls in chunk: {:?}", tool_calls);
+                            if let Some(first_tool) = tool_calls.first() {
+                                // Convert native tool call to our internal format
+                                detected_tool_call = Some((
+                                    crate::ToolCall {
+                                        tool: first_tool.tool.clone(),
+                                        args: first_tool.args.clone(),
+                                    },
+                                    current_response.len(), // Position doesn't matter for native calls
+                                ));
+                                debug!("Converted native tool call: {:?}", detected_tool_call);
+                            }
+                        } else {
+                            debug!("No native tool calls in chunk, chunk.tool_calls is None");
+                        }
+                        
+                        // If no native tool calls, check for JSON tool calls in text (embedded models)
+                        if detected_tool_call.is_none() {
+                            detected_tool_call = parser.add_chunk(&chunk.content);
+                        }
+                        
+                        if let Some((tool_call, tool_end_pos)) = detected_tool_call {
                             // Found a complete tool call! Stop streaming and execute it
                             let content_before_tool = parser.get_content_before_tool(tool_end_pos);
 
@@ -621,7 +659,7 @@ Let's start with the first step of your task.
                             // Tool call header
                             println!("┌─ {}", tool_call.tool);
                             if let Some(args_obj) = tool_call.args.as_object() {
-                                for (key, value) in args_obj {
+                                for (_key, value) in args_obj {
                                     let value_str = match value {
                                         serde_json::Value::String(s) => s.clone(),
                                         _ => value.to_string(),
@@ -664,7 +702,7 @@ Let's start with the first step of your task.
                             print!("🤖 "); // Continue response indicator
                             io::stdout().flush()?;
 
-                            // Update the conversation with the tool call and result
+                            // Add the tool call and result to the context window immediately
                             let tool_message = Message {
                                 role: MessageRole::Assistant,
                                 content: format!(
@@ -679,8 +717,12 @@ Let's start with the first step of your task.
                                 content: format!("Tool result: {}", tool_result),
                             };
 
-                            //request.messages.push(tool_message);
-                            request.messages.push(result_message);
+                            // Add to context window for persistence
+                            self.context_window.add_message(tool_message);
+                            self.context_window.add_message(result_message);
+
+                            // Update the request with the new context for next iteration
+                            request.messages = self.context_window.conversation_history.clone();
 
                             full_response.push_str(display_content);
                             full_response.push_str(&format!(

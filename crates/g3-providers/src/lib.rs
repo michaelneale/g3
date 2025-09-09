@@ -16,6 +16,11 @@ pub trait LLMProvider: Send + Sync {
     
     /// Get the model name
     fn model(&self) -> &str;
+    
+    /// Check if the provider supports native tool calling
+    fn has_native_tool_calling(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +65,14 @@ pub type CompletionStream = tokio_stream::wrappers::ReceiverStream<Result<Comple
 pub struct CompletionChunk {
     pub content: String,
     pub finished: bool,
+    pub tool_calls: Option<Vec<ToolCall>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub tool: String,
+    pub args: serde_json::Value,
 }
 
 /// Provider registry for managing multiple LLM providers

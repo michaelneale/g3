@@ -21,3 +21,4 @@ tokio-stream = "0.1"
 llama_cpp = { version = "0.3.2", features = ["metal"] }
 shellexpand = "3.1"
 tokio-util = "0.7"
+futures-util = "0.3"

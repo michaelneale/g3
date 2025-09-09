@@ -58,7 +58,7 @@ impl Default for Config {
                 openai: None,
                 anthropic: None,
                 embedded: None,
-                default_provider: "openai".to_string(),
+                default_provider: "anthropic".to_string(),
             },
             agent: AgentConfig {
                 max_context_length: 8192,

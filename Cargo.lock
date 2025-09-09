@@ -732,6 +732,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures-util",
  "g3-config",
  "g3-execution",
  "g3-providers",

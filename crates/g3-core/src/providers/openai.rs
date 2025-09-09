@@ -140,6 +140,7 @@ impl LLMProvider for OpenAIProvider {
         let chunk = CompletionChunk {
             content: completion.content,
             finished: true,
+            tool_calls: None,
         };
         
         tx.send(Ok(chunk)).await.map_err(|_| anyhow::anyhow!("Failed to send chunk"))?;
