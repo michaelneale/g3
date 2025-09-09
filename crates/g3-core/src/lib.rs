@@ -53,22 +53,31 @@ impl StreamingToolParser {
         // Look for the start of a tool call pattern: {"tool":
         if !self.in_tool_call {
             // Look for JSON tool call pattern - check both raw JSON and inside code blocks
-            if let Some(pos) = self.buffer.rfind(r#"{"tool":"#) {
-                //info!("Found tool call pattern at position: {}", pos);
+            // Also handle malformed patterns like {"{""tool"":
+            let patterns = [
+                r#"{"tool":"#,           // Normal pattern
+                r#"{"{""tool"":"#,       // Malformed pattern with extra brace and doubled quotes
+                r#"{{""tool"":"#,        // Alternative malformed pattern
+            ];
+            
+            for pattern in &patterns {
+                if let Some(pos) = self.buffer.rfind(pattern) {
+                    info!("Found tool call pattern '{}' at position: {}", pattern, pos);
 
-                // Check if this is inside a code block
-                let before_pos = &self.buffer[..pos];
-                let code_block_count = before_pos.matches("```").count();
+                    // Check if this is inside a code block
+                    let before_pos = &self.buffer[..pos];
+                    let code_block_count = before_pos.matches("```").count();
 
-                // Accept tool calls both inside and outside code blocks
-                // The LLM might use either format despite our instructions
-                //info!("Starting tool call parsing (code block status: {})", code_block_count % 2 == 1);
-                self.in_tool_call = true;
-                self.tool_start_pos = Some(pos);
-                self.brace_count = 0; // Start counting from 0, we'll count the opening brace in parsing
+                    // Accept tool calls both inside and outside code blocks
+                    // The LLM might use either format despite our instructions
+                    //info!("Starting tool call parsing (code block status: {})", code_block_count % 2 == 1);
+                    self.in_tool_call = true;
+                    self.tool_start_pos = Some(pos);
+                    self.brace_count = 0; // Start counting from 0, we'll count the opening brace in parsing
 
-                // Continue parsing from after the opening brace
-                return self.parse_from_start_pos(pos);
+                    // Continue parsing from after the opening brace
+                    return self.parse_from_start_pos(pos);
+                }
             }
         } else {
             //info!("Already in tool call, continuing parsing");
@@ -100,10 +109,17 @@ impl StreamingToolParser {
                     if current_brace_count == 0 {
                         // Found complete JSON object
                         let end_pos = start_pos + i + 1;
-                        let json_str = &self.buffer[start_pos..end_pos];
+                        let mut json_str = self.buffer[start_pos..end_pos].to_string();
 
-                        if let Ok(tool_call) = serde_json::from_str::<ToolCall>(json_str) {
-                            //info!("Successfully parsed tool call: {:?}", tool_call);
+                        // Clean up malformed JSON patterns
+                        json_str = json_str
+                            .replace(r#"{"{""#, r#"{"#)        // Fix {"{" -> {"
+                            .replace(r#"""}"#, r#""}"#)       // Fix ""} -> "}
+                            .replace(r#"{{""#, r#"{"#)        // Fix {{" -> {"
+                            .replace(r#"""}"#, r#""}"#);      // Fix ""} -> "}
+
+                        if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&json_str) {
+                            info!("Successfully parsed tool call: {:?}", tool_call);
                             // Reset parser state
                             self.in_tool_call = false;
                             self.tool_start_pos = None;
@@ -111,7 +127,7 @@ impl StreamingToolParser {
 
                             return Some((tool_call, end_pos));
                         } else {
-                            info!("Failed to parse JSON: {}", json_str);
+                            info!("Failed to parse JSON after cleanup: {}", json_str);
                             // Invalid JSON, reset and continue looking
                             self.in_tool_call = false;
                             self.tool_start_pos = None;
@@ -261,6 +277,7 @@ impl Agent {
                             "codellama" => 16384, // CodeLlama supports 16k context
                             "llama" => 4096,      // Base Llama models
                             "mistral" => 8192,    // Mistral models
+                            "qwen" => 32768,      // Qwen2.5 supports 32k context
                             _ => 4096,            // Conservative default
                         }
                     })
@@ -630,28 +647,42 @@ The tool will execute immediately and you'll receive the result to continue with
                             // Found a complete tool call! Stop streaming and execute it
                             let content_before_tool = parser.get_content_before_tool(tool_end_pos);
 
-                            // Display content up to the tool call (excluding the JSON)
+                            // Display content up to the tool call (excluding the JSON and any stop tokens)
                             let display_content = if let Some(json_start) =
                                 content_before_tool.rfind(r#"{"tool":"#)
                             {
-                                &content_before_tool[..json_start]
+                                // Only show content before the JSON tool call
+                                content_before_tool[..json_start].trim()
                             } else {
-                                &content_before_tool
+                                // Fallback: clean any stop tokens from the content
+                                content_before_tool.trim()
                             };
 
+                            // Clean stop tokens from display content
+                            let clean_display_content = display_content
+                                .replace("<|im_end|>", "")
+                                .replace("</s>", "")
+                                .replace("[/INST]", "")
+                                .replace("<</SYS>>", "");
+                            let final_display_content = clean_display_content.trim();
+
                             // Safely get the new content to display
-                            let new_content = if current_response.len() <= display_content.len() {
+                            let new_content = if current_response.len() <= final_display_content.len() {
                                 // Use char indices to avoid UTF-8 boundary issues
                                 let chars_already_shown = current_response.chars().count();
-                                display_content
+                                final_display_content
                                     .chars()
                                     .skip(chars_already_shown)
                                     .collect::<String>()
                             } else {
                                 String::new()
                             };
-                            print!("{}", new_content);
-                            io::stdout().flush()?;
+                            
+                            // Only print if there's actually new content to show
+                            if !new_content.trim().is_empty() {
+                                print!("{}", new_content);
+                                io::stdout().flush()?;
+                            }
 
                             // Execute the tool with formatted output
                             println!(); // New line before tool execution
@@ -724,20 +755,36 @@ The tool will execute immediately and you'll receive the result to continue with
                             // Update the request with the new context for next iteration
                             request.messages = self.context_window.conversation_history.clone();
 
-                            full_response.push_str(display_content);
+                            full_response.push_str(final_display_content);
                             full_response.push_str(&format!(
                                 "\n\nTool executed: {} -> {}\n\n",
                                 tool_call.tool, tool_result
                             ));
+
+                            // Check if this was a final_output tool call - if so, stop the conversation
+                            if tool_call.tool == "final_output" {
+                                println!(); // New line after final output
+                                let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
+                                return Ok((full_response, ttft));
+                            }
 
                             tool_executed = true;
                             // Break out of current stream to start a new one with updated context
                             break;
                         } else {
                             // No tool call detected, continue streaming normally
-                            print!("{}", chunk.content);
-                            io::stdout().flush()?;
-                            current_response.push_str(&chunk.content);
+                            // Filter out stop tokens from the streaming output
+                            let clean_content = chunk.content
+                                .replace("<|im_end|>", "")
+                                .replace("</s>", "")
+                                .replace("[/INST]", "")
+                                .replace("<</SYS>>", "");
+                            
+                            if !clean_content.is_empty() {
+                                print!("{}", clean_content);
+                                io::stdout().flush()?;
+                                current_response.push_str(&clean_content);
+                            }
                         }
 
                         if chunk.finished {
