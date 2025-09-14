@@ -4,7 +4,6 @@ use g3_execution::CodeExecutor;
 use g3_providers::{CompletionRequest, Message, MessageRole, ProviderRegistry};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -53,11 +52,14 @@ impl StreamingToolParser {
         // Look for the start of a tool call pattern: {"tool":
         if !self.in_tool_call {
             // Look for JSON tool call pattern - check both raw JSON and inside code blocks
-            // Also handle malformed patterns like {"{""tool"":
+            // Also handle malformed patterns and whitespace variations
             let patterns = [
-                r#"{"tool":"#,     // Normal pattern
-                r#"{"{""tool"":"#, // Malformed pattern with extra brace and doubled quotes
-                r#"{{""tool"":"#,  // Alternative malformed pattern
+                r#"{"tool":"#,        // Normal pattern
+                r#"{ "tool":"#,       // Pattern with space after opening brace
+                r#"{"tool" :"#,       // Pattern with space before colon
+                r#"{ "tool" :"#,      // Pattern with spaces around tool
+                r#"{"{""tool"":"#,    // Malformed pattern with extra brace and doubled quotes
+                r#"{{""tool"":"#,     // Alternative malformed pattern
             ];
 
             for pattern in &patterns {
@@ -66,7 +68,7 @@ impl StreamingToolParser {
 
                     // Check if this is inside a code block
                     let before_pos = &self.buffer[..pos];
-                    let code_block_count = before_pos.matches("```").count();
+                    let _code_block_count = before_pos.matches("```").count();
 
                     // Accept tool calls both inside and outside code blocks
                     // The LLM might use either format despite our instructions
@@ -427,31 +429,28 @@ impl Agent {
         show_timing: bool,
         cancellation_token: CancellationToken,
     ) -> Result<String> {
-        info!("Executing task: {}", description);
-
         let _provider = self.providers.get(None)?;
 
         // Only add system message if this is the first interaction (empty conversation history)
         if self.context_window.conversation_history.is_empty() {
-            let system_prompt = format!(
-                "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code.
+            let system_prompt = "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code.
 
 # Tool Call Format
 
 When you need to execute a tool, write ONLY the JSON tool call on a new line:
 
-{{\"tool\": \"tool_name\", \"args\": {{\"param\": \"value\"}}}}
+{\"tool\": \"tool_name\", \"args\": {\"param\": \"value\"}}
 
 The tool will execute immediately and you'll receive the result (success or error) to continue with.
 
 # Available Tools
 
 - **shell**: Execute shell commands
-  - Format: {{\"tool\": \"shell\", \"args\": {{\"command\": \"your_command_here\"}}}}
-  - Example: {{\"tool\": \"shell\", \"args\": {{\"command\": \"ls ~/Downloads\"}}}}
+  - Format: {\"tool\": \"shell\", \"args\": {\"command\": \"your_command_here\"}}
+  - Example: {\"tool\": \"shell\", \"args\": {\"command\": \"ls ~/Downloads\"}}
 
 - **final_output**: Signal task completion with a detailed summary of work done in markdown format
-  - Format: {{\"tool\": \"final_output\", \"args\": {{\"summary\": \"what_was_accomplished\"}}}}
+  - Format: {\"tool\": \"final_output\", \"args\": {\"summary\": \"what_was_accomplished\"}}
 
 # Instructions
 
@@ -465,7 +464,7 @@ The tool will execute immediately and you'll receive the result (success or erro
 - Use Markdown formatting for all responses except tool calls.
 - Whenever taking actions, use the pronoun 'I'
 
-");
+".to_string();
 
             if show_prompt {
                 println!("🔍 System Prompt:");
@@ -968,7 +967,7 @@ fn shell_escape_command(command: &str) -> String {
     }
 
     let cmd = parts[0];
-    let args = &parts[1..];
+    let _args = &parts[1..];
 
     // Commands that typically take file paths as arguments
     let file_commands = [
