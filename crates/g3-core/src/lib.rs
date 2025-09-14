@@ -54,18 +54,16 @@ impl StreamingToolParser {
             // Look for JSON tool call pattern - check both raw JSON and inside code blocks
             // Also handle malformed patterns and whitespace variations
             let patterns = [
-                r#"{"tool":"#,        // Normal pattern
-                r#"{ "tool":"#,       // Pattern with space after opening brace
-                r#"{"tool" :"#,       // Pattern with space before colon
-                r#"{ "tool" :"#,      // Pattern with spaces around tool
-                r#"{"{""tool"":"#,    // Malformed pattern with extra brace and doubled quotes
-                r#"{{""tool"":"#,     // Alternative malformed pattern
+                r#"{"tool":"#,     // Normal pattern
+                r#"{ "tool":"#,    // Pattern with space after opening brace
+                r#"{"tool" :"#,    // Pattern with space before colon
+                r#"{ "tool" :"#,   // Pattern with spaces around tool
+                r#"{"{""tool"":"#, // Malformed pattern with extra brace and doubled quotes
+                r#"{{""tool"":"#,  // Alternative malformed pattern
             ];
 
             for pattern in &patterns {
                 if let Some(pos) = self.buffer.rfind(pattern) {
-                    info!("Found tool call pattern '{}' at position: {}", pattern, pos);
-
                     // Check if this is inside a code block
                     let before_pos = &self.buffer[..pos];
                     let _code_block_count = before_pos.matches("```").count();
@@ -135,7 +133,6 @@ impl StreamingToolParser {
                         if json_str.contains(r#""tool": "shell""#) {
                             let fixed_json = fix_nested_quotes_in_shell_command(&json_str);
                             if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&fixed_json) {
-                                info!("Successfully parsed tool call after fixing nested quotes: {:?}", tool_call);
                                 // Reset parser state
                                 self.in_tool_call = false;
                                 self.tool_start_pos = None;
@@ -648,7 +645,7 @@ The tool will execute immediately and you'll receive the result (success or erro
     fn generate_session_id(&self, description: &str) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         // Clean and truncate the description for a readable filename
         let clean_description = description
             .chars()
@@ -659,12 +656,12 @@ The tool will execute immediately and you'll receive the result (success or erro
             .collect::<Vec<_>>()
             .join("_")
             .to_lowercase();
-        
+
         // Create a hash for uniqueness
         let mut hasher = DefaultHasher::new();
         description.hash(&mut hasher);
         let hash = hasher.finish();
-        
+
         // Format: clean_description_hash
         format!("{}_{:x}", clean_description, hash)
     }
@@ -699,8 +696,6 @@ The tool will execute immediately and you'll receive the result (success or erro
             Ok(json_content) => {
                 if let Err(e) = fs::write(&filename, json_content) {
                     error!("Failed to save context window to {}: {}", filename, e);
-                } else {
-                    info!("Context window saved to {}", filename);
                 }
             }
             Err(e) => {
@@ -997,11 +992,6 @@ The tool will execute immediately and you'll receive the result (success or erro
             }
 
             // Continue the loop to start a new stream with updated context
-            info!(
-                "Starting new stream iteration {} with {} messages",
-                iteration_count,
-                request.messages.len()
-            );
         }
 
         // If we exit the loop due to max iterations
