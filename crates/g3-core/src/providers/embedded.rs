@@ -517,7 +517,53 @@ impl LLMProvider for EmbeddedProvider {
                 }
 
                 if hit_stop {
-                    // Send any remaining clean content before stopping
+                    // Before stopping, check if there might be an incomplete tool call
+                    // Look for JSON tool call patterns that might be cut off by the stop sequence
+                    let has_potential_tool_call = accumulated_text.contains(r#"{"tool":"#) || 
+                                                  accumulated_text.contains(r#"{"{""tool"":"#) ||
+                                                  accumulated_text.contains(r#"{{""tool"":"#);
+                    
+                    if has_potential_tool_call {
+                        // Check if the tool call appears to be complete (has closing brace after the stop sequence)
+                        let mut complete_tool_call = false;
+                        for stop_seq in &stop_sequences {
+                            if let Some(stop_pos) = accumulated_text.find(stop_seq) {
+                                // Look for tool call pattern before the stop sequence
+                                let before_stop = &accumulated_text[..stop_pos];
+                                if let Some(tool_start) = before_stop.rfind(r#"{"tool":"#) {
+                                    let tool_part = &before_stop[tool_start..];
+                                    // Count braces to see if JSON is complete
+                                    let open_braces = tool_part.matches('{').count();
+                                    let close_braces = tool_part.matches('}').count();
+                                    if open_braces > 0 && open_braces == close_braces {
+                                        complete_tool_call = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // If tool call is incomplete, send the raw content including stop sequences
+                        // so the main parser can handle it properly
+                        if !complete_tool_call {
+                            debug!("Found incomplete tool call, sending raw content with stop sequences");
+                            let already_sent_len = accumulated_text.len() - unsent_tokens.len();
+                            if accumulated_text.len() > already_sent_len {
+                                let remaining_to_send = &accumulated_text[already_sent_len..];
+                                if !remaining_to_send.is_empty() {
+                                    let chunk = CompletionChunk {
+                                        content: remaining_to_send.to_string(),
+                                        finished: false,
+                                        tool_calls: None,
+                                    };
+                                    let _ = tx.blocking_send(Ok(chunk));
+                                }
+                            }
+                            break;
+                        }
+                    }
+                    
+                    // Send any remaining clean content before stopping (original behavior)
                     let mut clean_accumulated = accumulated_text.clone();
                     for stop_seq in &stop_sequences {
                         if let Some(pos) = clean_accumulated.find(stop_seq) {
