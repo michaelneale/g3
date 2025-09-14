@@ -254,6 +254,7 @@ pub struct Agent {
     providers: ProviderRegistry,
     config: Config,
     context_window: ContextWindow,
+    session_id: Option<String>,
 }
 
 impl Agent {
@@ -307,6 +308,7 @@ impl Agent {
             providers,
             config,
             context_window,
+            session_id: None,
         })
     }
 
@@ -430,6 +432,11 @@ impl Agent {
         cancellation_token: CancellationToken,
     ) -> Result<String> {
         let _provider = self.providers.get(None)?;
+
+        // Generate session ID based on the initial prompt if this is a new session
+        if self.session_id.is_none() {
+            self.session_id = Some(self.generate_session_id(description));
+        }
 
         // Only add system message if this is the first interaction (empty conversation history)
         if self.context_window.conversation_history.is_empty() {
@@ -555,16 +562,47 @@ The tool will execute immediately and you'll receive the result (success or erro
         }
     }
 
-    /// Save the entire context window to a file for debugging purposes
+    /// Generate a session ID based on the initial prompt
+    fn generate_session_id(&self, description: &str) -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        // Clean and truncate the description for a readable filename
+        let clean_description = description
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace() || *c == '-' || *c == '_')
+            .collect::<String>()
+            .split_whitespace()
+            .take(5) // Take first 5 words
+            .collect::<Vec<_>>()
+            .join("_")
+            .to_lowercase();
+        
+        // Create a hash for uniqueness
+        let mut hasher = DefaultHasher::new();
+        description.hash(&mut hasher);
+        let hash = hasher.finish();
+        
+        // Format: clean_description_hash
+        format!("{}_{:x}", clean_description, hash)
+    }
+
+    /// Save the entire context window to a per-session file
     fn save_context_window(&self, status: &str) {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        let filename = format!("g3_context_{}.json", timestamp);
+        // Use session-based filename if we have a session ID, otherwise fall back to timestamp
+        let filename = if let Some(ref session_id) = self.session_id {
+            format!("g3_session_{}.json", session_id)
+        } else {
+            format!("g3_context_{}.json", timestamp)
+        };
 
         let context_data = serde_json::json!({
+            "session_id": self.session_id,
             "timestamp": timestamp,
             "status": status,
             "context_window": {
