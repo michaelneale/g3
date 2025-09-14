@@ -147,12 +147,17 @@ impl StreamingToolParser {
                                 );
                             }
                         }
-                        
+
                         // Try to fix mixed quote issues (single quotes in JSON)
                         let fixed_mixed_quotes = fix_mixed_quotes_in_json(&json_str);
                         if fixed_mixed_quotes != json_str {
-                            if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&fixed_mixed_quotes) {
-                                info!("Successfully parsed tool call after fixing mixed quotes: {:?}", tool_call);
+                            if let Ok(tool_call) =
+                                serde_json::from_str::<ToolCall>(&fixed_mixed_quotes)
+                            {
+                                info!(
+                                    "Successfully parsed tool call after fixing mixed quotes: {:?}",
+                                    tool_call
+                                );
                                 // Reset parser state
                                 self.in_tool_call = false;
                                 self.tool_start_pos = None;
@@ -160,7 +165,10 @@ impl StreamingToolParser {
 
                                 return Some((tool_call, end_pos));
                             } else {
-                                info!("Failed to parse JSON even after fixing mixed quotes: {}", fixed_mixed_quotes);
+                                info!(
+                                    "Failed to parse JSON even after fixing mixed quotes: {}",
+                                    fixed_mixed_quotes
+                                );
                             }
                         } else {
                             info!("Failed to parse JSON (no fixes applied): {}", json_str);
@@ -442,7 +450,7 @@ The tool will execute immediately and you'll receive the result (success or erro
   - Format: {{\"tool\": \"shell\", \"args\": {{\"command\": \"your_command_here\"}}}}
   - Example: {{\"tool\": \"shell\", \"args\": {{\"command\": \"ls ~/Downloads\"}}}}
 
-- **final_output**: Signal task completion with a summary of work done in markdown format
+- **final_output**: Signal task completion with a detailed summary of work done in markdown format
   - Format: {{\"tool\": \"final_output\", \"args\": {{\"summary\": \"what_was_accomplished\"}}}}
 
 # Instructions
@@ -769,6 +777,22 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 );
                             }
 
+                            // Check if this was a final_output tool call - if so, stop the conversation
+                            if tool_call.tool == "final_output" {
+                                // For final_output, don't add the tool call and result to context
+                                // Just add the display content and return immediately
+                                full_response.push_str(final_display_content);
+                                if let Some(summary) = tool_call.args.get("summary") {
+                                    if let Some(summary_str) = summary.as_str() {
+                                        full_response.push_str(&format!("\n\n=> {}", summary_str));
+                                    }
+                                }
+                                println!(); // New line after final output
+                                let ttft =
+                                    first_token_time.unwrap_or_else(|| stream_start.elapsed());
+                                return Ok((full_response, ttft));
+                            }
+
                             // Closure marker with timing
                             println!("└─ ⚡️ {}", Self::format_duration(exec_duration));
                             println!();
@@ -802,14 +826,6 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 "\n\nTool executed: {} -> {}\n\n",
                                 tool_call.tool, tool_result
                             ));
-
-                            // Check if this was a final_output tool call - if so, stop the conversation
-                            if tool_call.tool == "final_output" {
-                                println!(); // New line after final output
-                                let ttft =
-                                    first_token_time.unwrap_or_else(|| stream_start.elapsed());
-                                return Ok((full_response, ttft));
-                            }
 
                             tool_executed = true;
                             // Break out of current stream to start a new one with updated context
@@ -907,12 +923,12 @@ The tool will execute immediately and you'll receive the result (success or erro
             "final_output" => {
                 if let Some(summary) = tool_call.args.get("summary") {
                     if let Some(summary_str) = summary.as_str() {
-                        Ok(format!("📋 Final Output: {}", summary_str))
+                        Ok(format!("{}", summary_str))
                     } else {
-                        Ok("📋 Task completed".to_string())
+                        Ok("✅ Task completed".to_string())
                     }
                 } else {
-                    Ok("📋 Task completed".to_string())
+                    Ok("✅ Task completed".to_string())
                 }
             }
             _ => {
@@ -1085,12 +1101,12 @@ fn fix_nested_quotes_in_shell_command(json_str: &str) -> String {
 fn fix_mixed_quotes_in_json(json_str: &str) -> String {
     // This handles cases where the LLM uses single quotes in JSON values
     // Example: {"tool": "shell", "args": {"command": 'echo "hello"'}}
-    
+
     let mut result = String::new();
     let mut chars = json_str.chars().peekable();
     let mut in_string = false;
     let mut string_delimiter = '"';
-    
+
     while let Some(ch) = chars.next() {
         match ch {
             '"' if !in_string => {
@@ -1130,7 +1146,7 @@ fn fix_mixed_quotes_in_json(json_str: &str) -> String {
             }
         }
     }
-    
+
     result
 }
 

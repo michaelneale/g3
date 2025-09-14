@@ -36,14 +36,32 @@ pub struct Cli {
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
-    let level = if cli.verbose {
-        tracing::Level::DEBUG
+    // Initialize logging with filtering
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    
+    // Create a filter that suppresses llama_cpp logs unless in verbose mode
+    let filter = if cli.verbose {
+        EnvFilter::from_default_env()
+            .add_directive(format!("{}=debug", env!("CARGO_PKG_NAME")).parse().unwrap())
+            .add_directive("g3_core=debug".parse().unwrap())
+            .add_directive("g3_cli=debug".parse().unwrap())
+            .add_directive("g3_execution=debug".parse().unwrap())
+            .add_directive("g3_providers=debug".parse().unwrap())
     } else {
-        tracing::Level::INFO
+        EnvFilter::from_default_env()
+            .add_directive(format!("{}=info", env!("CARGO_PKG_NAME")).parse().unwrap())
+            .add_directive("g3_core=info".parse().unwrap())
+            .add_directive("g3_cli=info".parse().unwrap())
+            .add_directive("g3_execution=info".parse().unwrap())
+            .add_directive("g3_providers=info".parse().unwrap())
+            .add_directive("llama_cpp=off".parse().unwrap()) // Suppress all llama_cpp logs
+            .add_directive("llama=off".parse().unwrap()) // Suppress all llama.cpp logs
     };
 
-    tracing_subscriber::fmt().with_max_level(level).init();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(filter)
+        .init();
 
     info!("Starting G3 AI Coding Agent");
 
