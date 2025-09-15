@@ -71,6 +71,50 @@ impl Default for Config {
 
 impl Config {
     pub fn load(config_path: Option<&str>) -> Result<Self> {
+        // Check if any config file exists
+        let config_exists = if let Some(path) = config_path {
+            Path::new(path).exists()
+        } else {
+            // Check default locations
+            let default_paths = [
+                "./g3.toml",
+                "~/.config/g3/config.toml",
+                "~/.g3.toml",
+            ];
+            
+            default_paths.iter().any(|path| {
+                let expanded_path = shellexpand::tilde(path);
+                Path::new(expanded_path.as_ref()).exists()
+            })
+        };
+        
+        // If no config exists, create and save a default Qwen config
+        if !config_exists {
+            let qwen_config = Self::default_qwen_config();
+            
+            // Save to default location
+            let config_dir = dirs::home_dir()
+                .map(|mut path| {
+                    path.push(".config");
+                    path.push("g3");
+                    path
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from("."));
+            
+            // Create directory if it doesn't exist
+            std::fs::create_dir_all(&config_dir).ok();
+            
+            let config_file = config_dir.join("config.toml");
+            if let Err(e) = qwen_config.save(config_file.to_str().unwrap()) {
+                eprintln!("Warning: Could not save default config: {}", e);
+            } else {
+                println!("Created default Qwen configuration at: {}", config_file.display());
+            }
+            
+            return Ok(qwen_config);
+        }
+        
+        // Existing config loading logic
         let mut settings = config::Config::builder();
         
         // Load default configuration
@@ -106,6 +150,30 @@ impl Config {
         
         let config = settings.build()?.try_deserialize()?;
         Ok(config)
+    }
+    
+    fn default_qwen_config() -> Self {
+        Self {
+            providers: ProvidersConfig {
+                openai: None,
+                anthropic: None,
+                embedded: Some(EmbeddedConfig {
+                    model_path: "~/.cache/g3/models/qwen2.5-7b-instruct-q3_k_m.gguf".to_string(),
+                    model_type: "qwen".to_string(),
+                    context_length: Some(32768),  // Qwen2.5 supports 32k context
+                    max_tokens: Some(2048),
+                    temperature: Some(0.1),
+                    gpu_layers: Some(32),
+                    threads: Some(8),
+                }),
+                default_provider: "embedded".to_string(),
+            },
+            agent: AgentConfig {
+                max_context_length: 8192,
+                enable_streaming: true,
+                timeout_seconds: 60,
+            },
+        }
     }
     
     pub fn save(&self, path: &str) -> Result<()> {
