@@ -118,6 +118,45 @@ impl EmbeddedProvider {
             // Add the start of assistant response
             formatted.push_str("<|im_start|>assistant\n");
             formatted
+        } else if model_name_lower.contains("mistral") {
+            // Mistral Instruct format: <s>[INST] ... [/INST] assistant_response</s>
+            let mut formatted = String::new();
+            let mut in_conversation = false;
+            
+            for (i, message) in messages.iter().enumerate() {
+                match message.role {
+                    MessageRole::System => {
+                        // Mistral doesn't have a special system token, include it at the start
+                        if i == 0 {
+                            formatted.push_str("<s>[INST] ");
+                            formatted.push_str(&message.content);
+                            formatted.push_str("\n\n");
+                            in_conversation = true;
+                        }
+                    }
+                    MessageRole::User => {
+                        if !in_conversation {
+                            formatted.push_str("<s>[INST] ");
+                        }
+                        formatted.push_str(&message.content);
+                        formatted.push_str(" [/INST]");
+                        in_conversation = false;
+                    }
+                    MessageRole::Assistant => {
+                        formatted.push_str(" ");
+                        formatted.push_str(&message.content);
+                        formatted.push_str("</s> ");
+                        in_conversation = false;
+                    }
+                }
+            }
+            
+            // If the last message was from user, add a space for the assistant's response
+            if messages.last().map_or(false, |m| matches!(m.role, MessageRole::User)) {
+                formatted.push_str(" ");
+            }
+            
+            formatted
         } else {
             // Use Llama/CodeLlama format for other models
             let mut formatted = String::new();
