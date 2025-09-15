@@ -7,13 +7,14 @@ use llama_cpp::{
     standard_sampler::{SamplerStage, StandardSampler},
     LlamaModel, LlamaParams, LlamaSession, SessionParams,
 };
-use std::path::Path;
-use std::sync::atomic::AtomicBool;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 pub struct EmbeddedProvider {
     model: Arc<LlamaModel>,
@@ -39,11 +40,19 @@ impl EmbeddedProvider {
 
         // Expand tilde in path
         let expanded_path = shellexpand::tilde(&model_path);
-        let model_path = Path::new(expanded_path.as_ref());
-
-        if !model_path.exists() {
-            anyhow::bail!("Model file not found: {}", model_path.display());
+        let model_path_buf = PathBuf::from(expanded_path.as_ref());
+        
+        // If model doesn't exist and it's the default Qwen model, offer to download it
+        if !model_path_buf.exists() {
+            if model_path.contains("qwen2.5-7b-instruct-q3_k_m.gguf") {
+                info!("Model file not found. Attempting to download Qwen 2.5 7B model...");
+                Self::download_qwen_model(&model_path_buf)?;
+            } else {
+                anyhow::bail!("Model file not found: {}", model_path_buf.display());
+            }
         }
+        
+        let model_path = model_path_buf.as_path();
 
         // Set up model parameters
         let mut params = LlamaParams::default();
@@ -376,6 +385,66 @@ impl EmbeddedProvider {
         }
         
         cleaned.trim().to_string()
+    }
+
+    // Download the Qwen 2.5 7B model if it doesn't exist
+    fn download_qwen_model(model_path: &Path) -> Result<()> {
+        use std::fs;
+        use std::io::Write;
+        use std::process::Command;
+        
+        const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf";
+        const MODEL_SIZE_MB: u64 = 3631; // Approximate size in MB
+        
+        // Create the parent directory if it doesn't exist
+        if let Some(parent) = model_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        
+        info!("Downloading Qwen 2.5 7B model (Q3_K_M quantization, ~3.5GB)...");
+        info!("This is a one-time download that may take several minutes depending on your connection.");
+        info!("Downloading to: {}", model_path.display());
+        
+        // Use curl with progress bar for download
+        let output = Command::new("curl")
+            .args(&[
+                "-L",  // Follow redirects
+                "-#",  // Show progress bar
+                "-f",  // Fail on HTTP errors
+                "-o", model_path.to_str().unwrap(),
+                MODEL_URL,
+            ])
+            .output()?;
+        
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            
+            // If curl is not available, provide alternative instructions
+            if stderr.contains("command not found") || stderr.contains("not found") {
+                error!("curl is not installed. Please install curl or manually download the model.");
+                error!("Manual download instructions:");
+                error!("1. Download from: {}", MODEL_URL);
+                error!("2. Save to: {}", model_path.display());
+                anyhow::bail!("curl not found - please install curl or download the model manually");
+            }
+            
+            anyhow::bail!("Failed to download model: {}", stderr);
+        }
+        
+        // Verify the file was created and has reasonable size
+        let metadata = fs::metadata(model_path)?;
+        let size_mb = metadata.len() / (1024 * 1024);
+        
+        if size_mb < MODEL_SIZE_MB - 100 {  // Allow some variance
+            fs::remove_file(model_path).ok();  // Clean up partial download
+            anyhow::bail!(
+                "Downloaded file appears incomplete ({}MB vs expected ~{}MB). Please try again.",
+                size_mb, MODEL_SIZE_MB
+            );
+        }
+        
+        info!("Successfully downloaded Qwen 2.5 7B model ({}MB)", size_mb);
+        Ok(())
     }
 }
 
