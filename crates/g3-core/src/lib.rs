@@ -262,23 +262,6 @@ impl Agent {
         let mut providers = ProviderRegistry::new();
 
         // Register providers based on configuration
-        if let Some(openai_config) = &config.providers.openai {
-            let openai_provider = crate::providers::openai::OpenAIProvider::new(
-                openai_config.api_key.clone(),
-                openai_config.model.clone(),
-                openai_config.base_url.clone(),
-            )?;
-            providers.register(openai_provider);
-        }
-
-        if let Some(anthropic_config) = &config.providers.anthropic {
-            let anthropic_provider = crate::providers::anthropic::AnthropicProvider::new(
-                anthropic_config.api_key.clone(),
-                anthropic_config.model.clone(),
-            )?;
-            providers.register(anthropic_provider);
-        }
-
         if let Some(embedded_config) = &config.providers.embedded {
             let embedded_provider = crate::providers::embedded::EmbeddedProvider::new(
                 embedded_config.model_path.clone(),
@@ -337,22 +320,7 @@ impl Agent {
                     config.agent.max_context_length as u32
                 }
             }
-            "openai" => {
-                // OpenAI model-specific context lengths
-                match model_name {
-                    m if m.contains("gpt-4") => 128000, // GPT-4 models have 128k context
-                    m if m.contains("gpt-3.5") => 16384, // GPT-3.5-turbo has 16k context
-                    _ => 4096,                          // Conservative default
-                }
-            }
-            "anthropic" => {
-                // Anthropic model-specific context lengths
-                match model_name {
-                    m if m.contains("claude-3") => 200000, // Claude-3 has 200k context
-                    m if m.contains("claude-2") => 100000, // Claude-2 has 100k context
-                    _ => 100000,                           // Conservative default for Claude
-                }
-            }
+
             _ => config.agent.max_context_length as u32,
         };
 
@@ -1188,7 +1156,5 @@ fn fix_mixed_quotes_in_json(json_str: &str) -> String {
 }
 
 pub mod providers {
-    pub mod anthropic;
     pub mod embedded;
-    pub mod openai;
 }

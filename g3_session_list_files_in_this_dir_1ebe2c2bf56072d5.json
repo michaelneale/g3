@@ -1,0 +1,32 @@
+{
+  "context_window": {
+    "conversation_history": [
+      {
+        "content": "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code.\n\n# Tool Call Format\n\nWhen you need to execute a tool, write ONLY the JSON tool call on a new line:\n\n{\"tool\": \"tool_name\", \"args\": {\"param\": \"value\"}}\n\nThe tool will execute immediately and you'll receive the result (success or error) to continue with.\n\n# Available Tools\n\n- **shell**: Execute shell commands\n  - Format: {\"tool\": \"shell\", \"args\": {\"command\": \"your_command_here\"}}\n  - Example: {\"tool\": \"shell\", \"args\": {\"command\": \"ls ~/Downloads\"}}\n\n- **final_output**: Signal task completion with a detailed summary of work done in markdown format\n  - Format: {\"tool\": \"final_output\", \"args\": {\"summary\": \"what_was_accomplished\"}}\n\n# Instructions\n\n1. Analyze the request and break down into smaller tasks if appropriate\n2. Execute ONE tool at a time\n3. STOP when the original request was satisfied\n4. Call the final_output tool when done\n\n# Response Guidelines\n\n- Use Markdown formatting for all responses except tool calls.\n- Whenever taking actions, use the pronoun 'I'\n\n",
+        "role": "system"
+      },
+      {
+        "content": "Task: list files in this dir",
+        "role": "user"
+      },
+      {
+        "content": "1. Understanding the task, I need to list the files in the current directory.\n2. I will execute the following tool call to achieve this:\n\n```json\n\n{\"tool\": \"shell\", \"args\": {\"command\":\"ls .\"}}",
+        "role": "assistant"
+      },
+      {
+        "content": "Tool result: Cargo.lock\nCargo.toml\nconfig.example.toml\ncrates\nDESIGN.md\nREADME.md\nsrc\ntarget",
+        "role": "user"
+      },
+      {
+        "content": "1. Understanding the task, I need to list the files in the current directory.\n2. I will execute the following tool call to achieve this:\n\n```json\n\nTool executed: shell -> Cargo.lock\nCargo.toml\nconfig.example.toml\ncrates\nDESIGN.md\nREADME.md\nsrc\ntarget\n\n1. I have executed the shell command and the tool returned the following files in the current directory: `Cargo.lock`, `Cargo.toml`, `config.example.toml`, `crates`, `DESIGN.md`, `README.md`, `src`, and `target`.\n2. Now, I will call the final_output tool to signal task completion and provide a summary of the work done.\n\n```json\n\n=> I have listed the following files in the current directory: Cargo.lock, Cargo.toml, config.example.toml, crates, DESIGN.md, README.md, src, and target.",
+        "role": "assistant"
+      }
+    ],
+    "percentage_used": 1.4312744140625,
+    "total_tokens": 32768,
+    "used_tokens": 469
+  },
+  "session_id": "list_files_in_this_dir_1ebe2c2bf56072d5",
+  "status": "completed",
+  "timestamp": 1758216583
+}
