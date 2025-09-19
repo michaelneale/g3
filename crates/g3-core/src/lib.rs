@@ -389,6 +389,62 @@ impl Agent {
         .await
     }
 
+    /// Split a complex request into simpler sub-tasks
+    async fn split_complex_request(&mut self, description: &str) -> Result<Vec<String>> {
+        let provider = self.providers.get(None)?;
+        
+        // Create a specific prompt to split the task
+        let split_prompt = format!(
+            "Analyze this request and split it into simpler, independent sub-tasks. \
+             Each sub-task should be on a new line. \
+             If the request is already simple enough, just return it as is. \
+             Do not add numbering, bullets, or any other formatting - just the tasks, one per line.\n\n\
+             Request: {}\n\n\
+             Sub-tasks:",
+            description
+        );
+        
+        let messages = vec![
+            Message {
+                role: MessageRole::System,
+                content: "You are a task decomposition assistant. Break down complex requests into simpler sub-tasks.".to_string(),
+            },
+            Message {
+                role: MessageRole::User,
+                content: split_prompt,
+            },
+        ];
+        
+        let request = CompletionRequest {
+            messages,
+            max_tokens: Some(512),
+            temperature: Some(0.1),
+            stream: false,
+        };
+        
+        // Use the non-streaming complete method
+        let response = provider.complete(request).await?;
+        
+        // Split the response by newlines and filter out empty lines
+        let tasks: Vec<String> = response.content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.trim().to_string())
+            .collect();
+        
+        // If we got back multiple tasks, return them; otherwise return the original
+        if tasks.len() > 1 {
+            info!("Split complex request into {} sub-tasks", tasks.len());
+            Ok(tasks)
+        } else if tasks.len() == 1 {
+            info!("Request is already simple, proceeding with single task");
+            Ok(vec![description.to_string()])
+        } else {
+            info!("No valid tasks returned from split, using original request");
+            Ok(vec![description.to_string()])
+        }
+    }
+
     pub async fn execute_task_with_timing_cancellable(
         &mut self,
         description: &str,
@@ -401,6 +457,64 @@ impl Agent {
     ) -> Result<String> {
         let _provider = self.providers.get(None)?;
 
+        // First, attempt to split the request into simpler sub-tasks
+        let sub_tasks = self.split_complex_request(description).await?;
+        
+        // If we have multiple sub-tasks, execute them sequentially
+        if sub_tasks.len() > 1 {
+            println!("📋 Breaking down request into {} sub-tasks:", sub_tasks.len());
+            for (i, task) in sub_tasks.iter().enumerate() {
+                println!("  {}. {}", i + 1, task);
+            }
+            println!();
+            
+            let mut all_responses = Vec::new();
+            
+            for (i, sub_task) in sub_tasks.iter().enumerate() {
+                println!("━━━ Sub-task {}/{} ━━━", i + 1, sub_tasks.len());
+                println!("📌 {}", sub_task);
+                println!();
+                
+                // Execute each sub-task
+                let result = self.execute_single_task(
+                    sub_task,
+                    show_prompt,
+                    show_code,
+                    show_timing,
+                    cancellation_token.clone()
+                ).await?;
+                
+                all_responses.push(result);
+                
+                // Add some spacing between tasks
+                if i < sub_tasks.len() - 1 {
+                    println!();
+                }
+            }
+            
+            // Combine all responses
+            println!("\n━━━ All sub-tasks completed ━━━");
+            Ok(all_responses.join("\n\n---\n\n"))
+        } else {
+            // Single task, execute normally
+            self.execute_single_task(
+                description,
+                show_prompt,
+                show_code,
+                show_timing,
+                cancellation_token
+            ).await
+        }
+    }
+
+    async fn execute_single_task(
+        &mut self,
+        description: &str,
+        show_prompt: bool,
+        _show_code: bool,
+        show_timing: bool,
+        cancellation_token: CancellationToken,
+    ) -> Result<String> {
         // Generate session ID based on the initial prompt if this is a new session
         if self.session_id.is_none() {
             self.session_id = Some(self.generate_session_id(description));
