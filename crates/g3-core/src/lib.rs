@@ -259,29 +259,42 @@ impl Agent {
     pub async fn new(config: Config) -> Result<Self> {
         let mut providers = ProviderRegistry::new();
 
-        // Register providers based on configuration
+        // Only register providers that are configured AND selected as the default provider
+        // This prevents unnecessary initialization of heavy providers like embedded models
+
+        // Register embedded provider if configured AND it's the default provider
         if let Some(embedded_config) = &config.providers.embedded {
-            let embedded_provider = crate::providers::embedded::EmbeddedProvider::new(
-                embedded_config.model_path.clone(),
-                embedded_config.model_type.clone(),
-                embedded_config.context_length,
-                embedded_config.max_tokens,
-                embedded_config.temperature,
-                embedded_config.gpu_layers,
-                embedded_config.threads,
-            )?;
-            providers.register(embedded_provider);
+            if config.providers.default_provider == "embedded" {
+                info!("Initializing embedded provider (selected as default)");
+                let embedded_provider = crate::providers::embedded::EmbeddedProvider::new(
+                    embedded_config.model_path.clone(),
+                    embedded_config.model_type.clone(),
+                    embedded_config.context_length,
+                    embedded_config.max_tokens,
+                    embedded_config.temperature,
+                    embedded_config.gpu_layers,
+                    embedded_config.threads,
+                )?;
+                providers.register(embedded_provider);
+            } else {
+                info!("Embedded provider configured but not selected as default, skipping initialization");
+            }
         }
 
-        // Register Anthropic provider if configured
+        // Register Anthropic provider if configured AND it's the default provider
         if let Some(anthropic_config) = &config.providers.anthropic {
-            let anthropic_provider = g3_providers::AnthropicProvider::new(
-                anthropic_config.api_key.clone(),
-                Some(anthropic_config.model.clone()),
-                anthropic_config.max_tokens,
-                anthropic_config.temperature,
-            )?;
-            providers.register(anthropic_provider);
+            if config.providers.default_provider == "anthropic" {
+                info!("Initializing Anthropic provider (selected as default)");
+                let anthropic_provider = g3_providers::AnthropicProvider::new(
+                    anthropic_config.api_key.clone(),
+                    Some(anthropic_config.model.clone()),
+                    anthropic_config.max_tokens,
+                    anthropic_config.temperature,
+                )?;
+                providers.register(anthropic_provider);
+            } else {
+                info!("Anthropic provider configured but not selected as default, skipping initialization");
+            }
         }
 
         // Set default provider
