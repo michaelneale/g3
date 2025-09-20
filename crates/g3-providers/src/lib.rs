@@ -29,6 +29,7 @@ pub struct CompletionRequest {
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
     pub stream: bool,
+    pub tools: Option<Vec<Tool>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -73,6 +74,13 @@ pub struct ToolCall {
     pub id: String,
     pub tool: String,
     pub args: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tool {
+    pub name: String,
+    pub description: String,
+    pub input_schema: serde_json::Value,
 }
 
 pub mod anthropic;
