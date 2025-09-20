@@ -14,3 +14,5 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 async-trait = "0.1"
 tokio-stream = "0.1"
+futures-util = "0.3"
+bytes = "1.0"

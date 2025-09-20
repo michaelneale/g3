@@ -272,6 +272,17 @@ impl Agent {
             providers.register(embedded_provider);
         }
 
+        // Register Anthropic provider if configured
+        if let Some(anthropic_config) = &config.providers.anthropic {
+            let anthropic_provider = g3_providers::AnthropicProvider::new(
+                anthropic_config.api_key.clone(),
+                Some(anthropic_config.model.clone()),
+                anthropic_config.max_tokens,
+                anthropic_config.temperature,
+            )?;
+            providers.register(anthropic_provider);
+        }
+
         // Set default provider
         debug!(
             "Setting default provider to: {}",
@@ -315,6 +326,18 @@ impl Agent {
                     })
                 } else {
                     config.agent.max_context_length as u32
+                }
+            }
+            "anthropic" => {
+                // Claude models have large context windows
+                if model_name.contains("claude-3-5-sonnet") {
+                    200000 // Claude 3.5 Sonnet supports 200k context
+                } else if model_name.contains("claude-3-haiku") {
+                    200000 // Claude 3 Haiku supports 200k context
+                } else if model_name.contains("claude-3-opus") {
+                    200000 // Claude 3 Opus supports 200k context
+                } else {
+                    200000 // Default for Claude models
                 }
             }
 

@@ -75,6 +75,10 @@ pub struct ToolCall {
     pub args: serde_json::Value,
 }
 
+pub mod anthropic;
+
+pub use anthropic::AnthropicProvider;
+
 /// Provider registry for managing multiple LLM providers
 pub struct ProviderRegistry {
     providers: HashMap<String, Box<dyn LLMProvider>>,
