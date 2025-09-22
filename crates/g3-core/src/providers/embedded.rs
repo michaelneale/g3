@@ -8,22 +8,18 @@ use llama_cpp::{
     LlamaModel, LlamaParams, LlamaSession, SessionParams,
 };
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 pub struct EmbeddedProvider {
-    model: Arc<LlamaModel>,
     session: Arc<Mutex<LlamaSession>>,
     model_name: String,
     max_tokens: u32,
     temperature: f32,
     context_length: u32,
-    generation_active: Arc<AtomicBool>,
 }
 
 impl EmbeddedProvider {
@@ -84,13 +80,11 @@ impl EmbeddedProvider {
         info!("Successfully loaded {} model", model_type);
 
         Ok(Self {
-            model: Arc::new(model),
             session: Arc::new(Mutex::new(session)),
             model_name: format!("embedded-{}", model_type),
             max_tokens: max_tokens.unwrap_or(2048),
             temperature: temperature.unwrap_or(0.1),
             context_length: context_size,
-            generation_active: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -429,7 +423,6 @@ impl EmbeddedProvider {
     // Download the Qwen 2.5 7B model if it doesn't exist
     fn download_qwen_model(model_path: &Path) -> Result<()> {
         use std::fs;
-        use std::io::Write;
         use std::process::Command;
         
         const MODEL_URL: &str = "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q3_k_m.gguf";

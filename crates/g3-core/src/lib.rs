@@ -250,7 +250,6 @@ impl ContextWindow {
 
 pub struct Agent {
     providers: ProviderRegistry,
-    config: Config,
     context_window: ContextWindow,
     session_id: Option<String>,
 }
@@ -311,7 +310,6 @@ impl Agent {
 
         Ok(Self {
             providers,
-            config,
             context_window,
             session_id: None,
         })
@@ -838,9 +836,7 @@ The tool will execute immediately and you'll receive the result (success or erro
         let mut total_execution_time = Duration::new(0, 0);
         let mut iteration_count = 0;
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
-
-        print!("🤖 "); // Start the response indicator
-        io::stdout().flush()?;
+        let mut response_started = false;
 
         loop {
             iteration_count += 1;
@@ -953,6 +949,11 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             // Only print if there's actually new content to show
                             if !new_content.trim().is_empty() {
+                                // Replace thinking indicator with response indicator if not already done
+                                if !response_started {
+                                    print!("\r🤖 "); // Clear thinking indicator and show response indicator
+                                    response_started = true;
+                                }
                                 print!("{}", new_content);
                                 io::stdout().flush()?;
                             }
@@ -1050,10 +1051,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                             }
 
                             full_response.push_str(final_display_content);
-                            full_response.push_str(&format!(
-                                "\n\nTool executed: {} -> {}\n\n",
-                                tool_call.tool, tool_result
-                            ));
+                            // full_response.push_str(&format!(
+                            //     "\n\nTool executed: {} -> {}\n\n",
+                            //     tool_call.tool, tool_result
+                            // ));
 
                             tool_executed = true;
                             // Break out of current stream to start a new one with updated context
@@ -1069,6 +1070,12 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 .replace("<</SYS>>", "");
 
                             if !clean_content.is_empty() {
+                                // Replace thinking indicator with response indicator on first content
+                                if !response_started {
+                                    print!("\r🤖 "); // Clear thinking indicator and show response indicator
+                                    response_started = true;
+                                }
+
                                 debug!("Printing clean content: '{}'", clean_content);
                                 print!("{}", clean_content);
                                 let _ = io::stdout().flush(); // Force immediate output
@@ -1317,8 +1324,8 @@ fn fix_nested_quotes_in_shell_command(json_str: &str) -> String {
                     }
                     '\\' => {
                         // Check what follows the backslash
-                        if let Some(&next_ch) = chars.peek() {
-                            if next_ch == '"' {
+                        if let Some(&_next_ch) = chars.peek() {
+                            if _next_ch == '"' {
                                 // This is an escaped quote, keep the backslash
                                 fixed_command.push(ch);
                             } else {
@@ -1382,7 +1389,7 @@ fn fix_mixed_quotes_in_json(json_str: &str) -> String {
             '\\' if in_string => {
                 // Escape sequence - preserve it
                 result.push(ch);
-                if let Some(&next_ch) = chars.peek() {
+                if let Some(&_next_ch) = chars.peek() {
                     result.push(chars.next().unwrap());
                 }
             }

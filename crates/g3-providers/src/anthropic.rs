@@ -194,20 +194,6 @@ impl AnthropicProvider {
             .collect()
     }
 
-    fn convert_anthropic_tool_calls(&self, content: &[AnthropicContent]) -> Vec<ToolCall> {
-        content
-            .iter()
-            .filter_map(|c| match c {
-                AnthropicContent::ToolUse { id, name, input } => Some(ToolCall {
-                    id: id.clone(),
-                    tool: name.clone(),
-                    args: input.clone(),
-                }),
-                _ => None,
-            })
-            .collect()
-    }
-
     fn convert_messages(&self, messages: &[Message]) -> Result<(Option<String>, Vec<AnthropicMessage>)> {
         let mut system_message = None;
         let mut anthropic_messages = Vec::new();
@@ -668,14 +654,8 @@ enum AnthropicContent {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicResponse {
-    id: String,
-    #[serde(rename = "type")]
-    response_type: String,
-    role: String,
     content: Vec<AnthropicContent>,
     model: String,
-    stop_reason: Option<String>,
-    stop_sequence: Option<String>,
     usage: AnthropicUsage,
 }
 
@@ -701,8 +681,6 @@ struct AnthropicStreamEvent {
 
 #[derive(Debug, Deserialize)]
 struct AnthropicDelta {
-    #[serde(rename = "type")]
-    delta_type: Option<String>,
     text: Option<String>,
     partial_json: Option<String>,
 }
@@ -710,7 +688,9 @@ struct AnthropicDelta {
 #[derive(Debug, Deserialize)]
 struct AnthropicError {
     #[serde(rename = "type")]
+    #[allow(dead_code)]
     error_type: String,
+    #[allow(dead_code)]
     message: String,
 }
 
@@ -812,33 +792,5 @@ mod tests {
         assert_eq!(anthropic_tools[0].input_schema.schema_type, "object");
         assert!(anthropic_tools[0].input_schema.required.is_some());
         assert_eq!(anthropic_tools[0].input_schema.required.as_ref().unwrap()[0], "location");
-    }
-
-    #[test]
-    fn test_tool_call_conversion() {
-        let provider = AnthropicProvider::new(
-            "test-key".to_string(),
-            None,
-            None,
-            None,
-        ).unwrap();
-
-        let content = vec![
-            AnthropicContent::Text {
-                text: "I'll help you get the weather.".to_string(),
-            },
-            AnthropicContent::ToolUse {
-                id: "toolu_123".to_string(),
-                name: "get_weather".to_string(),
-                input: serde_json::json!({"location": "San Francisco, CA"}),
-            },
-        ];
-
-        let tool_calls = provider.convert_anthropic_tool_calls(&content);
-
-        assert_eq!(tool_calls.len(), 1);
-        assert_eq!(tool_calls[0].id, "toolu_123");
-        assert_eq!(tool_calls[0].tool, "get_weather");
-        assert_eq!(tool_calls[0].args["location"], "San Francisco, CA");
     }
 }

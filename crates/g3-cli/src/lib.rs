@@ -2,9 +2,9 @@ use anyhow::Result;
 use clap::Parser;
 use g3_config::Config;
 use g3_core::Agent;
-use indicatif::{ProgressBar, ProgressStyle};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use std::io::Write;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -141,6 +141,10 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 
                 // Add to history
                 rl.add_history_entry(input)?;
+
+                // Show thinking indicator immediately
+                print!("🤔 Thinking...");
+                std::io::stdout().flush()?;
 
                 // Create cancellation token for this request
                 let cancellation_token = CancellationToken::new();
