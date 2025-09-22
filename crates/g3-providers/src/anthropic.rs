@@ -338,19 +338,34 @@ impl AnthropicProvider {
                                                 match content_block {
                                                     AnthropicContent::ToolUse { id, name, input } => {
                                                         debug!("Found tool use in content_block_start: id={}, name={}, input={:?}", id, name, input);
-                                                        debug!("Input JSON string: {}", serde_json::to_string(&input).unwrap_or_else(|_| "failed to serialize".to_string()));
                                                         
-                                                        // Create initial tool call - we'll update the args later from streaming JSON
+                                                        // For native tool calls, create the tool call immediately if we have complete args
+                                                        // If args are empty, we'll wait for partial_json to accumulate them
                                                         let tool_call = ToolCall {
                                                             id: id.clone(),
                                                             tool: name.clone(),
-                                                            args: input, // This might be empty initially
+                                                            args: input.clone(),
                                                         };
-                                                        debug!("Created initial tool call: {:?}", tool_call);
-                                                        current_tool_calls.push(tool_call);
                                                         
-                                                        // Reset partial JSON accumulator for this tool
-                                                        partial_tool_json.clear();
+                                                        // Check if we already have complete arguments
+                                                        if !input.is_null() && input != serde_json::Value::Object(serde_json::Map::new()) {
+                                                            // We have complete arguments, send the tool call immediately
+                                                            debug!("Tool call has complete args, sending immediately: {:?}", tool_call);
+                                                            let chunk = CompletionChunk {
+                                                                content: String::new(),
+                                                                finished: false,
+                                                                tool_calls: Some(vec![tool_call]),
+                                                            };
+                                                            if tx.send(Ok(chunk)).await.is_err() {
+                                                                debug!("Receiver dropped, stopping stream");
+                                                                return;
+                                                            }
+                                                        } else {
+                                                            // Arguments are empty, we'll accumulate them from partial_json
+                                                            debug!("Tool call has empty args, will accumulate from partial_json");
+                                                            current_tool_calls.push(tool_call);
+                                                            partial_tool_json.clear();
+                                                        }
                                                     }
                                                     _ => {
                                                         debug!("Non-tool content block: {:?}", content_block);
@@ -361,6 +376,7 @@ impl AnthropicProvider {
                                         "content_block_delta" => {
                                             if let Some(delta) = event.delta {
                                                 if let Some(text) = delta.text {
+                                                    debug!("Sending text chunk of length {}: '{}'", text.len(), text);
                                                     let chunk = CompletionChunk {
                                                         content: text,
                                                         finished: false,

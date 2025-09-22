@@ -580,6 +580,7 @@ IMPORTANT: You must call tools to complete tasks. When you receive a request:
 For shell commands: Use the shell tool with the exact command needed. Avoid commands that produce a large amount of output, and consider piping those outputs to files. Example: If asked to list files, immediately call the shell tool with command parameter \"ls\".
 For task completion: Use the final_output tool with a summary.
 
+IMPORTANT: If the user asks you to just respond with text (like \"just say hello\" or \"tell me about X\"), do NOT use tools. Simply respond with the requested text directly. Only use tools when you need to execute commands or complete tasks that require action.
 
 Do not explain what you're going to do - just do it by calling the tools.".to_string()
             } else {
@@ -1068,8 +1069,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 .replace("<</SYS>>", "");
 
                             if !clean_content.is_empty() {
+                                debug!("Printing clean content: '{}'", clean_content);
                                 print!("{}", clean_content);
-                                io::stdout().flush()?;
+                                let _ = io::stdout().flush(); // Force immediate output
+                                debug!("Flushed {} characters to stdout", clean_content.len());
                                 current_response.push_str(&clean_content);
                             }
                         }
