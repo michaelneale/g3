@@ -316,7 +316,7 @@ impl AnthropicProvider {
 
                             match serde_json::from_str::<AnthropicStreamEvent>(data) {
                                 Ok(event) => {
-                                    debug!("Parsed event: {:?}", event);
+                                    debug!("Parsed event type: {}, event: {:?}", event.event_type, event);
                                     match event.event_type.as_str() {
                                         "content_block_start" => {
                                             debug!("Received content_block_start event: {:?}", event);

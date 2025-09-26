@@ -228,3 +228,5 @@ fn display_context_progress(agent: &Agent) {
         progress_bar, percentage, context.used_tokens, context.total_tokens
     );
 }
+
+
