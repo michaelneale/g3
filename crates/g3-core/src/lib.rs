@@ -224,6 +224,12 @@ impl ContextWindow {
     }
 
     pub fn add_message(&mut self, message: Message) {
+        // Skip messages with empty content to avoid API errors
+        if message.content.trim().is_empty() {
+            warn!("Skipping empty message to avoid API error");
+            return;
+        }
+
         // Simple token estimation: ~4 characters per token
         let estimated_tokens = (message.content.len() as f32 / 4.0).ceil() as u32;
         self.used_tokens += estimated_tokens;
@@ -419,7 +425,7 @@ impl Agent {
 
         // Create a specific prompt to split the task
         let split_prompt = format!(
-            "Analyze this request and split it into sub-tasks. \
+            "Analyze this request and split it into smaller tasks. \
              If the request is already simple enough, just return it as is. \
              Do not add numbering, bullets, or any other formatting - just the tasks, one per line.\n\n\
              Request: {}\n\n\
@@ -430,7 +436,7 @@ impl Agent {
         let messages = vec![
             Message {
                 role: MessageRole::System,
-                content: "You are a task decomposition assistant. Break down complex requests into simpler sub-tasks.".to_string(),
+                content: "You are a task decomposition assistant. Break down complex requests into logical sub-tasks.".to_string(),
             },
             Message {
                 role: MessageRole::User,
@@ -902,10 +908,14 @@ The tool will execute immediately and you'll receive the result (success or erro
                             debug!("No native tool calls in chunk, chunk.tool_calls is None");
                         }
 
-                        // Only fall back to JSON parsing if no native tool calls and provider doesn't support native calling
-                        if detected_tool_call.is_none() && !provider.has_native_tool_calling() {
-                            // For embedded models and other non-native providers, parse JSON from text
+                        // Always try JSON parsing as fallback, even for native providers
+                        // This handles cases where Anthropic returns tool calls as text instead of native format
+                        if detected_tool_call.is_none() {
+                            // Try to parse JSON tool calls from text content
                             detected_tool_call = parser.add_chunk(&chunk.content);
+                            if detected_tool_call.is_some() {
+                                debug!("Found JSON tool call in text content for native provider");
+                            }
                         }
 
                         if let Some((tool_call, tool_end_pos)) = detected_tool_call {

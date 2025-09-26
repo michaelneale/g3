@@ -31,6 +31,10 @@ pub struct Cli {
 
     /// Task to execute (if provided, runs in single-shot mode instead of interactive)
     pub task: Option<String>,
+
+    /// Enable autonomous mode with coach-player feedback loop
+    #[arg(long)]
+    pub autonomous: bool,
 }
 
 pub async fn run() -> Result<()> {
@@ -71,8 +75,12 @@ pub async fn run() -> Result<()> {
     // Initialize agent
     let mut agent = Agent::new(config).await?;
 
-    // Execute task or start interactive mode
-    if let Some(task) = cli.task {
+    // Execute task, autonomous mode, or start interactive mode
+    if cli.autonomous {
+        // Autonomous mode with coach-player feedback loop
+        info!("Starting autonomous mode");
+        run_autonomous(agent, cli.show_prompt, cli.show_code).await?;
+    } else if let Some(task) = cli.task {
         // Single-shot mode
         info!("Executing task: {}", task);
         let result = agent
@@ -206,6 +214,116 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
     }
 
     println!("👋 Goodbye!");
+    Ok(())
+}
+
+async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
+    println!("🤖 G3 AI Coding Agent - Autonomous Mode");
+    println!("🎯 Looking for requirements.md in current directory...");
+
+    // Check if requirements.md exists
+    let requirements_path = std::path::Path::new("requirements.md");
+    if !requirements_path.exists() {
+        println!("❌ Error: requirements.md not found in current directory");
+        println!("   Please create a requirements.md file with your project requirements");
+        return Ok(());
+    }
+
+    // Read requirements.md
+    let requirements = match std::fs::read_to_string(requirements_path) {
+        Ok(content) => content,
+        Err(e) => {
+            println!("❌ Error reading requirements.md: {}", e);
+            return Ok(());
+        }
+    };
+
+    println!("📋 Requirements loaded from requirements.md");
+    println!("🔄 Starting coach-player feedback loop...");
+    println!();
+
+    const MAX_TURNS: usize = 5;
+    let mut turn = 1;
+    let mut coach_feedback = String::new();
+
+    loop {
+        println!("━━━ Turn {}/{} - Player Mode ━━━", turn, MAX_TURNS);
+        
+        // Player mode: implement requirements (with coach feedback if available)
+        let player_prompt = if coach_feedback.is_empty() {
+            format!(
+                "You are G3 in implementation mode. Read and implement the following requirements:\n\n{}\n\nImplement this step by step, creating all necessary files and code.",
+                requirements
+            )
+        } else {
+            format!(
+                "You are G3 in implementation mode. You need to address the coach's feedback and improve your implementation.\n\nORIGINAL REQUIREMENTS:\n{}\n\nCOACH FEEDBACK TO ADDRESS:\n{}\n\nPlease make the necessary improvements to address the coach's feedback while ensuring all original requirements are met.",
+                requirements, coach_feedback
+            )
+        };
+
+        let _player_result = agent
+            .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
+            .await?;
+
+        println!("\n🎯 Player implementation completed");
+        println!();
+
+        // Create a new agent instance for coach mode to ensure fresh context
+        let config = g3_config::Config::load(None)?;
+        let mut coach_agent = Agent::new(config).await?;
+
+        println!("━━━ Turn {}/{} - Coach Mode ━━━", turn, MAX_TURNS);
+        
+        // Coach mode: critique the implementation
+        let coach_prompt = format!(
+            "You are G3 in coach mode. Your role is to critique and review implementations against requirements.
+
+REQUIREMENTS:
+{}
+
+IMPLEMENTATION REVIEW:
+Review the current state of the project and provide a concise critique focusing on:
+1. Whether the requirements are correctly implemented
+2. What's missing or incorrect
+3. Specific improvements needed
+
+If the implementation correctly meets all requirements, respond with: 'IMPLEMENTATION_APPROVED'
+If improvements are needed, provide specific actionable feedback.
+
+Keep your response concise and focused on actionable items.",
+            requirements
+        );
+
+        let coach_result = coach_agent
+            .execute_task_with_timing(&coach_prompt, None, false, show_prompt, show_code, true)
+            .await?;
+
+        println!("\n🎓 Coach review completed");
+
+        // Check if coach approved the implementation
+        if coach_result.contains("IMPLEMENTATION_APPROVED") {
+            println!("\n✅ Coach approved the implementation!");
+            println!("🎉 Autonomous mode completed successfully");
+            break;
+        }
+
+        // Check if we've reached max turns
+        if turn >= MAX_TURNS {
+            println!("\n⏰ Maximum turns ({}) reached", MAX_TURNS);
+            println!("🔄 Autonomous mode completed (max iterations)");
+            break;
+        }
+
+        // Store coach feedback for next iteration
+        coach_feedback = coach_result;
+        turn += 1;
+        
+        println!("\n🔄 Coach provided feedback for next iteration");
+        println!("📝 Preparing to incorporate feedback in turn {}", turn);
+        println!();
+    }
+
     Ok(())
 }
 
