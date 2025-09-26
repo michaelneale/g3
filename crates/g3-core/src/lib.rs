@@ -973,7 +973,22 @@ The tool will execute immediately and you'll receive the result (success or erro
                             if let Some(args_obj) = tool_call.args.as_object() {
                                 for (_key, value) in args_obj {
                                     let value_str = match value {
-                                        serde_json::Value::String(s) => s.clone(),
+                                        serde_json::Value::String(s) => {
+                                            // For shell commands, truncate at newlines to keep display clean
+                                            if tool_call.tool == "shell" && _key == "command" {
+                                                if let Some(first_line) = s.lines().next() {
+                                                    if s.lines().count() > 1 {
+                                                        format!("{}...", first_line)
+                                                    } else {
+                                                        first_line.to_string()
+                                                    }
+                                                } else {
+                                                    s.clone()
+                                                }
+                                            } else {
+                                                s.clone()
+                                            }
+                                        },
                                         _ => value.to_string(),
                                     };
                                     println!("│ {}", value_str);
