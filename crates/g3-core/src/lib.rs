@@ -342,15 +342,7 @@ impl Agent {
             }
             "anthropic" => {
                 // Claude models have large context windows
-                if model_name.contains("claude-3-5-sonnet") {
-                    200000 // Claude 3.5 Sonnet supports 200k context
-                } else if model_name.contains("claude-3-haiku") {
-                    200000 // Claude 3 Haiku supports 200k context
-                } else if model_name.contains("claude-3-opus") {
-                    200000 // Claude 3 Opus supports 200k context
-                } else {
-                    200000 // Default for Claude models
-                }
+                200000 // Default for Claude models
             }
 
             _ => config.agent.max_context_length as u32,
@@ -427,8 +419,7 @@ impl Agent {
 
         // Create a specific prompt to split the task
         let split_prompt = format!(
-            "Analyze this request and split it into simpler, independent sub-tasks. \
-             Each sub-task should be on a new line. \
+            "Analyze this request and split it into sub-tasks. \
              If the request is already simple enough, just return it as is. \
              Do not add numbering, bullets, or any other formatting - just the tasks, one per line.\n\n\
              Request: {}\n\n\
@@ -574,13 +565,19 @@ IMPORTANT: You must call tools to complete tasks. When you receive a request:
 2. Immediately call the appropriate tool with the required parameters
 3. Wait for the tool result
 4. Continue or complete the task based on the result
+5. Call the final_output task with a detailed summary when done with all tasks.
 
 For shell commands: Use the shell tool with the exact command needed. Avoid commands that produce a large amount of output, and consider piping those outputs to files. Example: If asked to list files, immediately call the shell tool with command parameter \"ls\".
-For task completion: Use the final_output tool with a summary.
 
 IMPORTANT: If the user asks you to just respond with text (like \"just say hello\" or \"tell me about X\"), do NOT use tools. Simply respond with the requested text directly. Only use tools when you need to execute commands or complete tasks that require action.
 
-Do not explain what you're going to do - just do it by calling the tools.".to_string()
+Do not explain what you're going to do - just do it by calling the tools.
+
+# Response Guidelines
+
+- Use Markdown formatting for all responses except tool calls.
+- Whenever taking actions, use the pronoun 'I'
+".to_string()
             } else {
                 // For non-native providers (embedded models), use JSON format instructions
                 "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code.
