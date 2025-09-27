@@ -39,6 +39,10 @@ pub struct Cli {
     /// Enable autonomous mode with coach-player feedback loop
     #[arg(long)]
     pub autonomous: bool,
+
+    /// Maximum number of turns in autonomous mode (default: 5)
+    #[arg(long, default_value = "5")]
+    pub max_turns: usize,
 }
 
 pub async fn run() -> Result<()> {
@@ -83,7 +87,7 @@ pub async fn run() -> Result<()> {
     if cli.autonomous {
         // Autonomous mode with coach-player feedback loop
         info!("Starting autonomous mode");
-        run_autonomous(agent, cli.show_prompt, cli.show_code).await?;
+        run_autonomous(agent, cli.show_prompt, cli.show_code, cli.max_turns).await?;
     } else if let Some(task) = cli.task {
         // Single-shot mode
         info!("Executing task: {}", task);
@@ -515,7 +519,7 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
+async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, max_turns: usize) -> Result<()> {
     // Set up workspace directory
     let workspace_dir = setup_workspace_directory()?;
 
@@ -581,12 +585,12 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
         if skip_player_turn {
             logger.log_section(&format!(
                 "TURN {}/{} - SKIPPING PLAYER MODE",
-                turn, MAX_TURNS
+                turn, max_turns
             ));
             logger.log("📁 Existing project files detected, skipping to coach evaluation");
             skip_player_turn = false; // Only skip the first turn
         } else {
-            logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, MAX_TURNS));
+            logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, max_turns));
 
             // Player mode: implement requirements (with coach feedback if available)
             let player_prompt = if coach_feedback.is_empty() {
@@ -659,7 +663,7 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
         // Ensure coach agent is also in the workspace directory
         std::env::set_current_dir(&workspace_dir)?;
 
-        logger.log_section(&format!("TURN {}/{} - COACH MODE", turn, MAX_TURNS));
+        logger.log_section(&format!("TURN {}/{} - COACH MODE", turn, max_turns));
 
         // Coach mode: critique the implementation
         let coach_prompt = format!(
@@ -732,9 +736,9 @@ Keep your response concise and focused on actionable items.",
         }
 
         // Check if we've reached max turns
-        if turn >= MAX_TURNS {
+        if turn >= max_turns {
             logger.log_section("SESSION COMPLETED - MAX TURNS REACHED");
-            logger.log(&format!("⏰ Maximum turns ({}) reached", MAX_TURNS));
+            logger.log(&format!("⏰ Maximum turns ({}) reached", max_turns));
             logger.log("🔄 Autonomous mode completed (max iterations)");
             break;
         }

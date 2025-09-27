@@ -958,12 +958,14 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             // Tool call header
                             println!("┌─ {}", tool_call.tool);
+                            debug!("Tool call args object: {:?}", tool_call.args.as_object());
                             if let Some(args_obj) = tool_call.args.as_object() {
-                                for (_key, value) in args_obj {
+                                for (key, value) in args_obj {
+                                    debug!("Processing arg: {} = {:?}", key, value);
                                     let value_str = match value {
                                         serde_json::Value::String(s) => {
                                             // For shell commands, truncate at newlines to keep display clean
-                                            if tool_call.tool == "shell" && _key == "command" {
+                                            if tool_call.tool == "shell" && key == "command" {
                                                 if let Some(first_line) = s.lines().next() {
                                                     if s.lines().count() > 1 {
                                                         format!("{}...", first_line)
@@ -974,13 +976,20 @@ The tool will execute immediately and you'll receive the result (success or erro
                                                     s.clone()
                                                 }
                                             } else {
-                                                s.clone()
+                                                // For other tools, show first 100 chars to avoid huge displays
+                                                if s.len() > 100 {
+                                                    format!("{}...", &s[..100])
+                                                } else {
+                                                    s.clone()
+                                                }
                                             }
                                         }
                                         _ => value.to_string(),
                                     };
-                                    println!("│ {}", value_str);
+                                    println!("│ {}: {}", key, value_str);
                                 }
+                            } else {
+                                debug!("No args object found in tool call");
                             }
                             println!("├─ output:");
 
@@ -1216,8 +1225,14 @@ The tool will execute immediately and you'll receive the result (success or erro
             }
             "write_file" => {
                 debug!("Processing write_file tool call");
+                debug!("Raw tool_call.args: {:?}", tool_call.args);
+                debug!("Args as JSON: {}", serde_json::to_string(&tool_call.args).unwrap_or_else(|_| "failed to serialize".to_string()));
+                
                 let file_path = tool_call.args.get("file_path");
                 let content = tool_call.args.get("content");
+
+                debug!("file_path: {:?}", file_path);
+                debug!("content: {:?}", content);
 
                 if let (Some(path_val), Some(content_val)) = (file_path, content) {
                     if let (Some(path_str), Some(content_str)) =
