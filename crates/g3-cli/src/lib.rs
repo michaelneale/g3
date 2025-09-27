@@ -762,12 +762,16 @@ Keep your response concise and focused on actionable items.",
     }
 
     // Display the comprehensive metrics summary
-    println!("\n{}", session_metrics.generate_summary());
-
-    // Also log the summary to file
     let summary = session_metrics.generate_summary();
-    for line in summary.lines() {
-        logger.log(line);
+    println!("\n{}", summary);
+
+    // Also log the summary to file (without printing to console again)
+    if let Ok(mut writer) = logger.log_writer.lock() {
+        let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+        for line in summary.lines() {
+            let _ = writeln!(writer, "[{}] {}", timestamp, line);
+        }
+        let _ = writer.flush();
     }
 
     Ok(())
