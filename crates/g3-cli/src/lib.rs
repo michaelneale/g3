@@ -256,41 +256,53 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
     };
 
     logger.log("📋 Requirements loaded from requirements.md");
-    logger.log(&format!("Requirements content:\n{}", requirements));
+    logger.log(&format!("Requirements: {}", logger.truncate_for_log(&requirements, 150)));
+    
+    // Check if there are existing project files (skip first player turn if so)
+    let has_existing_files = check_existing_project_files(&workspace_dir, &logger)?;
+    
     logger.log("🔄 Starting coach-player feedback loop...");
     logger.log("");
 
     const MAX_TURNS: usize = 5;
     let mut turn = 1;
     let mut coach_feedback = String::new();
+    let mut skip_player_turn = has_existing_files;
 
     loop {
-        logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, MAX_TURNS));
-        
-        // Player mode: implement requirements (with coach feedback if available)
-        let player_prompt = if coach_feedback.is_empty() {
-            format!(
-                "You are G3 in implementation mode. Read and implement the following requirements:\n\n{}\n\nImplement this step by step, creating all necessary files and code.",
-                requirements
-            )
+        // Skip player turn if we have existing files and this is the first iteration
+        if skip_player_turn {
+            logger.log_section(&format!("TURN {}/{} - SKIPPING PLAYER MODE", turn, MAX_TURNS));
+            logger.log("📁 Existing project files detected, skipping to coach evaluation");
+            skip_player_turn = false; // Only skip the first turn
         } else {
-            format!(
-                "You are G3 in implementation mode. You need to address the coach's feedback and improve your implementation.\n\nORIGINAL REQUIREMENTS:\n{}\n\nCOACH FEEDBACK TO ADDRESS:\n{}\n\nPlease make the necessary improvements to address the coach's feedback while ensuring all original requirements are met.",
-                requirements, coach_feedback
-            )
-        };
+            logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, MAX_TURNS));
+            
+            // Player mode: implement requirements (with coach feedback if available)
+            let player_prompt = if coach_feedback.is_empty() {
+                format!(
+                    "You are G3 in implementation mode. Read and implement the following requirements:\n\n{}\n\nImplement this step by step, creating all necessary files and code.",
+                    requirements
+                )
+            } else {
+                format!(
+                    "You are G3 in implementation mode. You need to address the coach's feedback and improve your implementation.\n\nORIGINAL REQUIREMENTS:\n{}\n\nCOACH FEEDBACK TO ADDRESS:\n{}\n\nPlease make the necessary improvements to address the coach's feedback while ensuring all original requirements are met.",
+                    requirements, coach_feedback
+                )
+            };
 
-        logger.log("🎯 Starting player implementation...");
-        if !coach_feedback.is_empty() {
-            logger.log("📝 Incorporating coach feedback from previous turn");
+            logger.log("🎯 Starting player implementation...");
+            if !coach_feedback.is_empty() {
+                logger.log("📝 Incorporating coach feedback from previous turn");
+            }
+
+            let _player_result = agent
+                .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
+                .await?;
+
+            logger.log("🎯 Player implementation completed");
+            logger.log("");
         }
-
-        let _player_result = agent
-            .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
-            .await?;
-
-        logger.log("🎯 Player implementation completed");
-        logger.log("");
 
         // Create a new agent instance for coach mode to ensure fresh context
         // Make sure the coach agent also operates in the workspace directory
@@ -358,6 +370,64 @@ Keep your response concise and focused on actionable items.",
 
     logger.log_section("G3 AUTONOMOUS MODE SESSION ENDED");
     Ok(())
+}
+
+/// Check if there are existing project files in the workspace directory
+/// Returns true if project files are found (excluding requirements.md and logs directory)
+fn check_existing_project_files(workspace_dir: &PathBuf, logger: &AutonomousLogger) -> Result<bool> {
+    logger.log("🔍 Checking for existing project files...");
+    
+    let entries = match std::fs::read_dir(workspace_dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            logger.log(&format!("❌ Failed to read workspace directory: {}", e));
+            return Ok(false);
+        }
+    };
+    
+    let mut project_files = Vec::new();
+    let mut total_files = 0;
+    
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let file_name = path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        
+        // Skip requirements.md, logs directory, and hidden files
+        if file_name == "requirements.md" || file_name == "logs" || file_name.starts_with('.') {
+            continue;
+        }
+        
+        total_files += 1;
+        
+        // Collect project files for logging (limit to first 5)
+        if project_files.len() < 5 {
+            if path.is_dir() {
+                project_files.push(format!("{}/", file_name));
+            } else {
+                project_files.push(file_name.to_string());
+            }
+        }
+    }
+    
+    if total_files > 0 {
+        logger.log(&format!("📁 Found {} existing project files", total_files));
+        if !project_files.is_empty() {
+            let files_display = if total_files > 5 {
+                format!("{} (and {} more)", project_files.join(", "), total_files - 5)
+            } else {
+                project_files.join(", ")
+            };
+            logger.log(&format!("   Files: {}", files_display));
+        }
+        logger.log("⏭️  Will skip first player turn and evaluate existing implementation");
+        Ok(true)
+    } else {
+        logger.log("📂 No existing project files found, starting fresh implementation");
+        Ok(false)
+    }
 }
 
 fn display_context_progress(agent: &Agent) {
@@ -431,28 +501,67 @@ impl AutonomousLogger {
         Ok(Self { log_writer })
     }
     
-    fn log(&self, message: &str) {
-        // Print to console
-        println!("{}", message);
+    /// Truncate text to a single line for logging
+    fn truncate_for_log(&self, text: &str, max_chars: usize) -> String {
+        // First, get the first line only
+        let first_line = text.lines().next().unwrap_or("").trim();
         
-        // Write to log file with timestamp
+        // Then truncate if too long
+        if first_line.len() <= max_chars {
+            first_line.to_string()
+        } else {
+            format!("{}...", &first_line[..max_chars.saturating_sub(3)])
+        }
+    }
+    
+    fn log(&self, message: &str) {
+        // Ensure single line for console output
+        let single_line_message = self.truncate_for_log(message, 200);
+        
+        // Print to console
+        println!("{}", single_line_message);
+        
+        // Write to log file with timestamp (also single line)
         if let Ok(mut writer) = self.log_writer.lock() {
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
-            let _ = writeln!(writer, "[{}] {}", timestamp, message);
+            let _ = writeln!(writer, "[{}] {}", timestamp, single_line_message);
             let _ = writer.flush();
         }
     }
     
     fn log_section(&self, section: &str) {
+        // Sections can be multi-line for visual separation, but content should be single line
+        let single_line_section = self.truncate_for_log(section, 100);
         let separator = "=".repeat(80);
-        let message = format!("{}\n{}\n{}", separator, section, separator);
-        self.log(&message);
+        
+        // Print to console with visual formatting
+        println!("{}", separator);
+        println!("{}", single_line_section);
+        println!("{}", separator);
+        
+        // Log to file as single entries
+        if let Ok(mut writer) = self.log_writer.lock() {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+            let _ = writeln!(writer, "[{}] === {} ===", timestamp, single_line_section);
+            let _ = writer.flush();
+        }
     }
     
     fn log_subsection(&self, subsection: &str) {
+        let single_line_subsection = self.truncate_for_log(subsection, 100);
         let separator = "-".repeat(60);
-        let message = format!("{}\n{}\n{}", separator, subsection, separator);
-        self.log(&message);
+        
+        // Print to console with visual formatting
+        println!("{}", separator);
+        println!("{}", single_line_subsection);
+        println!("{}", separator);
+        
+        // Log to file as single entry
+        if let Ok(mut writer) = self.log_writer.lock() {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+            let _ = writeln!(writer, "[{}] --- {} ---", timestamp, single_line_subsection);
+            let _ = writer.flush();
+        }
     }
 }
 
