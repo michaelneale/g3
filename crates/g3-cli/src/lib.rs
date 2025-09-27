@@ -4,7 +4,10 @@ use g3_config::Config;
 use g3_core::Agent;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use std::io::Write;
+use std::fs::OpenOptions;
+use std::io::{Write, BufWriter};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -218,36 +221,51 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 }
 
 async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
-    println!("🤖 G3 AI Coding Agent - Autonomous Mode");
-    println!("🎯 Looking for requirements.md in current directory...");
+    // Set up workspace directory
+    let workspace_dir = setup_workspace_directory()?;
+    
+    // Set up logging
+    let logger = AutonomousLogger::new(&workspace_dir)?;
+    
+    logger.log_section("G3 AUTONOMOUS MODE SESSION STARTED");
+    logger.log(&format!("🤖 G3 AI Coding Agent - Autonomous Mode"));
+    logger.log(&format!("📁 Using workspace directory: {}", workspace_dir.display()));
+    
+    // Change to workspace directory
+    std::env::set_current_dir(&workspace_dir)?;
+    logger.log("📂 Changed to workspace directory");
+    
+    logger.log("🎯 Looking for requirements.md in workspace directory...");
 
     // Check if requirements.md exists
-    let requirements_path = std::path::Path::new("requirements.md");
+    let requirements_path = workspace_dir.join("requirements.md");
     if !requirements_path.exists() {
-        println!("❌ Error: requirements.md not found in current directory");
-        println!("   Please create a requirements.md file with your project requirements");
+        logger.log("❌ Error: requirements.md not found in workspace directory");
+        logger.log(&format!("   Please create a requirements.md file with your project requirements at:"));
+        logger.log(&format!("   {}", requirements_path.display()));
         return Ok(());
     }
 
     // Read requirements.md
-    let requirements = match std::fs::read_to_string(requirements_path) {
+    let requirements = match std::fs::read_to_string(&requirements_path) {
         Ok(content) => content,
         Err(e) => {
-            println!("❌ Error reading requirements.md: {}", e);
+            logger.log(&format!("❌ Error reading requirements.md: {}", e));
             return Ok(());
         }
     };
 
-    println!("📋 Requirements loaded from requirements.md");
-    println!("🔄 Starting coach-player feedback loop...");
-    println!();
+    logger.log("📋 Requirements loaded from requirements.md");
+    logger.log(&format!("Requirements content:\n{}", requirements));
+    logger.log("🔄 Starting coach-player feedback loop...");
+    logger.log("");
 
     const MAX_TURNS: usize = 5;
     let mut turn = 1;
     let mut coach_feedback = String::new();
 
     loop {
-        println!("━━━ Turn {}/{} - Player Mode ━━━", turn, MAX_TURNS);
+        logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, MAX_TURNS));
         
         // Player mode: implement requirements (with coach feedback if available)
         let player_prompt = if coach_feedback.is_empty() {
@@ -262,18 +280,27 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
             )
         };
 
+        logger.log("🎯 Starting player implementation...");
+        if !coach_feedback.is_empty() {
+            logger.log("📝 Incorporating coach feedback from previous turn");
+        }
+
         let _player_result = agent
             .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
             .await?;
 
-        println!("\n🎯 Player implementation completed");
-        println!();
+        logger.log("🎯 Player implementation completed");
+        logger.log("");
 
         // Create a new agent instance for coach mode to ensure fresh context
+        // Make sure the coach agent also operates in the workspace directory
         let config = g3_config::Config::load(None)?;
         let mut coach_agent = Agent::new(config).await?;
+        
+        // Ensure coach agent is also in the workspace directory
+        std::env::set_current_dir(&workspace_dir)?;
 
-        println!("━━━ Turn {}/{} - Coach Mode ━━━", turn, MAX_TURNS);
+        logger.log_section(&format!("TURN {}/{} - COACH MODE", turn, MAX_TURNS));
         
         // Coach mode: critique the implementation
         let coach_prompt = format!(
@@ -295,23 +322,28 @@ Keep your response concise and focused on actionable items.",
             requirements
         );
 
+        logger.log("🎓 Starting coach review...");
+
         let coach_result = coach_agent
             .execute_task_with_timing(&coach_prompt, None, false, show_prompt, show_code, true)
             .await?;
 
-        println!("\n🎓 Coach review completed");
+        logger.log("🎓 Coach review completed");
+        logger.log(&format!("Coach feedback: {}", coach_result));
 
         // Check if coach approved the implementation
         if coach_result.contains("IMPLEMENTATION_APPROVED") {
-            println!("\n✅ Coach approved the implementation!");
-            println!("🎉 Autonomous mode completed successfully");
+            logger.log_section("SESSION COMPLETED - IMPLEMENTATION APPROVED");
+            logger.log("✅ Coach approved the implementation!");
+            logger.log("🎉 Autonomous mode completed successfully");
             break;
         }
 
         // Check if we've reached max turns
         if turn >= MAX_TURNS {
-            println!("\n⏰ Maximum turns ({}) reached", MAX_TURNS);
-            println!("🔄 Autonomous mode completed (max iterations)");
+            logger.log_section("SESSION COMPLETED - MAX TURNS REACHED");
+            logger.log(&format!("⏰ Maximum turns ({}) reached", MAX_TURNS));
+            logger.log("🔄 Autonomous mode completed (max iterations)");
             break;
         }
 
@@ -319,11 +351,12 @@ Keep your response concise and focused on actionable items.",
         coach_feedback = coach_result;
         turn += 1;
         
-        println!("\n🔄 Coach provided feedback for next iteration");
-        println!("📝 Preparing to incorporate feedback in turn {}", turn);
-        println!();
+        logger.log("🔄 Coach provided feedback for next iteration");
+        logger.log(&format!("📝 Preparing to incorporate feedback in turn {}", turn));
+        logger.log("");
     }
 
+    logger.log_section("G3 AUTONOMOUS MODE SESSION ENDED");
     Ok(())
 }
 
@@ -345,6 +378,82 @@ fn display_context_progress(agent: &Agent) {
         "Context: {} {:.1}% | {}/{} tokens",
         progress_bar, percentage, context.used_tokens, context.total_tokens
     );
+}
+
+/// Set up the workspace directory for autonomous mode
+/// Uses G3_WORKSPACE environment variable or defaults to ~/tmp/workspace
+fn setup_workspace_directory() -> Result<PathBuf> {
+    let workspace_dir = if let Ok(env_workspace) = std::env::var("G3_WORKSPACE") {
+        PathBuf::from(env_workspace)
+    } else {
+        // Default to ~/tmp/workspace
+        let home_dir = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Could not determine home directory"))?;
+        home_dir.join("tmp").join("workspace")
+    };
+
+    // Create the directory if it doesn't exist
+    if !workspace_dir.exists() {
+        std::fs::create_dir_all(&workspace_dir)?;
+        println!("📁 Created workspace directory: {}", workspace_dir.display());
+    }
+
+    Ok(workspace_dir)
+}
+
+/// Logger for autonomous mode that writes to both console and log file
+struct AutonomousLogger {
+    log_writer: Arc<Mutex<BufWriter<std::fs::File>>>,
+}
+
+impl AutonomousLogger {
+    fn new(workspace_dir: &PathBuf) -> Result<Self> {
+        // Create logs subdirectory
+        let logs_dir = workspace_dir.join("logs");
+        if !logs_dir.exists() {
+            std::fs::create_dir_all(&logs_dir)?;
+        }
+        
+        // Create log file with timestamp in logs subdirectory
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let log_path = logs_dir.join(format!("g3_autonomous_{}.log", timestamp));
+        
+        let file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(true)
+            .open(&log_path)?;
+        
+        let log_writer = Arc::new(Mutex::new(BufWriter::new(file)));
+        
+        println!("📝 Logging autonomous session to: {}", log_path.display());
+        
+        Ok(Self { log_writer })
+    }
+    
+    fn log(&self, message: &str) {
+        // Print to console
+        println!("{}", message);
+        
+        // Write to log file with timestamp
+        if let Ok(mut writer) = self.log_writer.lock() {
+            let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+            let _ = writeln!(writer, "[{}] {}", timestamp, message);
+            let _ = writer.flush();
+        }
+    }
+    
+    fn log_section(&self, section: &str) {
+        let separator = "=".repeat(80);
+        let message = format!("{}\n{}\n{}", separator, section, separator);
+        self.log(&message);
+    }
+    
+    fn log_subsection(&self, subsection: &str) {
+        let separator = "-".repeat(60);
+        let message = format!("{}\n{}\n{}", separator, subsection, separator);
+        self.log(&message);
+    }
 }
 
 

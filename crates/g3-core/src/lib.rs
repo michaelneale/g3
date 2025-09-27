@@ -853,32 +853,32 @@ The tool will execute immediately and you'll receive the result (success or erro
                     "required": ["file_path", "content"]
                 }),
             },
-            Tool {
-                name: "edit_file".to_string(),
-                description: "Edit a specific range of lines in a file".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "file_path": {
-                            "type": "string",
-                            "description": "The path to the file to edit"
-                        },
-                        "start_line": {
-                            "type": "integer",
-                            "description": "The starting line number (1-based) of the range to replace"
-                        },
-                        "end_line": {
-                            "type": "integer",
-                            "description": "The ending line number (1-based) of the range to replace"
-                        },
-                        "new_text": {
-                            "type": "string",
-                            "description": "The new text to replace the specified range"
-                        }
-                    },
-                    "required": ["file_path", "start_line", "end_line", "new_text"]
-                }),
-            },
+            // Tool {
+            //     name: "edit_file".to_string(),
+            //     description: "Edit a specific range of lines in a file".to_string(),
+            //     input_schema: json!({
+            //         "type": "object",
+            //         "properties": {
+            //             "file_path": {
+            //                 "type": "string",
+            //                 "description": "The path to the file to edit"
+            //             },
+            //             "start_line": {
+            //                 "type": "integer",
+            //                 "description": "The starting line number (1-based) of the range to replace"
+            //             },
+            //             "end_line": {
+            //                 "type": "integer",
+            //                 "description": "The ending line number (1-based) of the range to replace"
+            //             },
+            //             "new_text": {
+            //                 "type": "string",
+            //                 "description": "The new text to replace the specified range"
+            //             }
+            //         },
+            //         "required": ["file_path", "start_line", "end_line", "new_text"]
+            //     }),
+            // },
             Tool {
                 name: "final_output".to_string(),
                 description: "Signal task completion with a detailed summary".to_string(),
@@ -1074,7 +1074,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                                             } else {
                                                 s.clone()
                                             }
-                                        },
+                                        }
                                         _ => value.to_string(),
                                     };
                                     println!("│ {}", value_str);
@@ -1288,7 +1288,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                         match std::fs::read_to_string(path_str) {
                             Ok(content) => {
                                 let line_count = content.lines().count();
-                                Ok(format!("📄 File content ({} lines):\n{}", line_count, content))
+                                Ok(format!(
+                                    "📄 File content ({} lines):\n{}",
+                                    line_count, content
+                                ))
                             }
                             Err(e) => Ok(format!("❌ Failed to read file '{}': {}", path_str, e)),
                         }
@@ -1303,24 +1306,34 @@ The tool will execute immediately and you'll receive the result (success or erro
                 debug!("Processing write_file tool call");
                 let file_path = tool_call.args.get("file_path");
                 let content = tool_call.args.get("content");
-                
+
                 if let (Some(path_val), Some(content_val)) = (file_path, content) {
-                    if let (Some(path_str), Some(content_str)) = (path_val.as_str(), content_val.as_str()) {
+                    if let (Some(path_str), Some(content_str)) =
+                        (path_val.as_str(), content_val.as_str())
+                    {
                         debug!("Writing to file: {}", path_str);
-                        
+
                         // Create parent directories if they don't exist
                         if let Some(parent) = std::path::Path::new(path_str).parent() {
                             if let Err(e) = std::fs::create_dir_all(parent) {
-                                return Ok(format!("❌ Failed to create parent directories for '{}': {}", path_str, e));
+                                return Ok(format!(
+                                    "❌ Failed to create parent directories for '{}': {}",
+                                    path_str, e
+                                ));
                             }
                         }
-                        
+
                         match std::fs::write(path_str, content_str) {
                             Ok(()) => {
                                 let line_count = content_str.lines().count();
-                                Ok(format!("✅ Successfully wrote {} lines to '{}'", line_count, path_str))
+                                Ok(format!(
+                                    "✅ Successfully wrote {} lines to '{}'",
+                                    line_count, path_str
+                                ))
                             }
-                            Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", path_str, e)),
+                            Err(e) => {
+                                Ok(format!("❌ Failed to write to file '{}': {}", path_str, e))
+                            }
                         }
                     } else {
                         Ok("❌ Invalid file_path or content argument".to_string())
@@ -1331,85 +1344,131 @@ The tool will execute immediately and you'll receive the result (success or erro
             }
             "edit_file" => {
                 debug!("Processing edit_file tool call");
+                debug!("Raw tool_call.args: {:?}", tool_call.args);
+
                 let file_path = tool_call.args.get("file_path");
                 let start_line = tool_call.args.get("start_line");
                 let end_line = tool_call.args.get("end_line");
                 let new_text = tool_call.args.get("new_text");
-                
-                if let (Some(path_val), Some(start_val), Some(end_val), Some(text_val)) = 
-                    (file_path, start_line, end_line, new_text) {
-                    
-                    if let (Some(path_str), Some(start_num), Some(end_num), Some(text_str)) = 
-                        (path_val.as_str(), start_val.as_i64(), end_val.as_i64(), text_val.as_str()) {
-                        
-                        debug!("Editing file: {} (lines {}-{})", path_str, start_num, end_num);
-                        
+
+                debug!("Extracted values - file_path: {:?}, start_line: {:?}, end_line: {:?}, new_text: {:?}",
+                       file_path, start_line, end_line, new_text);
+
+                if let (Some(path_val), Some(start_val), Some(end_val), Some(text_val)) =
+                    (file_path, start_line, end_line, new_text)
+                {
+                    debug!("All required arguments present");
+                    debug!(
+                        "path_val: {:?}, start_val: {:?}, end_val: {:?}, text_val: {:?}",
+                        path_val, start_val, end_val, text_val
+                    );
+
+                    if let (Some(path_str), Some(start_num), Some(end_num), Some(text_str)) = (
+                        path_val.as_str(),
+                        start_val.as_i64(),
+                        end_val.as_i64(),
+                        text_val.as_str(),
+                    ) {
+                        debug!("Successfully converted types - path: {}, start: {}, end: {}, text_len: {}",
+                               path_str, start_num, end_num, text_str.len());
+
                         // Validate line numbers
                         if start_num < 1 || end_num < 1 || start_num > end_num {
                             return Ok("❌ Invalid line numbers: start_line and end_line must be >= 1 and start_line <= end_line".to_string());
                         }
-                        
+
                         // Read the current file content
                         let original_content = match std::fs::read_to_string(path_str) {
                             Ok(content) => content,
-                            Err(e) => return Ok(format!("❌ Failed to read file '{}': {}", path_str, e)),
+                            Err(e) => {
+                                return Ok(format!("❌ Failed to read file '{}': {}", path_str, e))
+                            }
                         };
-                        
+
                         let lines: Vec<&str> = original_content.lines().collect();
                         let total_lines = lines.len();
-                        
+                        debug!("File has {} lines", total_lines);
+
                         // Convert to 0-based indexing
                         let start_idx = (start_num - 1) as usize;
                         let end_idx = (end_num - 1) as usize;
-                        
+                        debug!(
+                            "Using 0-based indices: start_idx={}, end_idx={}",
+                            start_idx, end_idx
+                        );
+
                         // Validate line ranges
                         if start_idx >= total_lines {
-                            return Ok(format!("❌ start_line {} is beyond file length ({} lines)", start_num, total_lines));
+                            return Ok(format!(
+                                "❌ start_line {} is beyond file length ({} lines)",
+                                start_num, total_lines
+                            ));
                         }
                         if end_idx >= total_lines {
-                            return Ok(format!("❌ end_line {} is beyond file length ({} lines)", end_num, total_lines));
+                            return Ok(format!(
+                                "❌ end_line {} is beyond file length ({} lines)",
+                                end_num, total_lines
+                            ));
                         }
-                        
+
                         // Split new_text into lines
                         let new_lines: Vec<&str> = if text_str.is_empty() {
                             vec![]
                         } else {
                             text_str.lines().collect()
                         };
-                        
+
                         let new_lines_count = new_lines.len();
-                        
+                        debug!("New text has {} lines", new_lines_count);
+
                         // Create the new content
                         let mut new_content_lines = Vec::new();
-                        
+
                         // Add lines before the edit range
                         new_content_lines.extend_from_slice(&lines[..start_idx]);
-                        
+
                         // Add the new lines
                         new_content_lines.extend(new_lines);
-                        
+
                         // Add lines after the edit range
                         if end_idx + 1 < lines.len() {
                             new_content_lines.extend_from_slice(&lines[end_idx + 1..]);
                         }
-                        
+
                         // Join the lines back together
                         let new_content = new_content_lines.join("\n");
-                        
+                        debug!("New content length: {} characters", new_content.len());
+
                         // Write the modified content back to the file
                         match std::fs::write(path_str, &new_content) {
                             Ok(()) => {
                                 let old_range_size = end_idx - start_idx + 1;
-                                Ok(format!("✅ Successfully edited '{}': replaced {} lines ({}:{}) with {} lines", 
+                                Ok(format!("✅ Successfully edited '{}': replaced {} lines ({}:{}) with {} lines",
                                     path_str, old_range_size, start_num, end_num, new_lines_count))
                             }
-                            Err(e) => Ok(format!("❌ Failed to write edited content to '{}': {}", path_str, e)),
+                            Err(e) => Ok(format!(
+                                "❌ Failed to write edited content to '{}': {}",
+                                path_str, e
+                            )),
                         }
                     } else {
+                        debug!("Type conversion failed:");
+                        debug!("  path_val.as_str(): {:?}", path_val.as_str());
+                        debug!("  start_val.as_i64(): {:?}", start_val.as_i64());
+                        debug!("  end_val.as_i64(): {:?}", end_val.as_i64());
+                        debug!("  text_val.as_str(): {:?}", text_val.as_str());
                         Ok("❌ Invalid argument types: file_path must be string, start_line and end_line must be integers, new_text must be string".to_string())
                     }
                 } else {
-                    Ok("❌ Missing required arguments: file_path, start_line, end_line, new_text".to_string())
+                    debug!("Missing required arguments:");
+                    debug!("  file_path present: {}", file_path.is_some());
+                    debug!("  start_line present: {}", start_line.is_some());
+                    debug!("  end_line present: {}", end_line.is_some());
+                    debug!("  new_text present: {}", new_text.is_some());
+                    Ok(
+                        "❌ Missing required arguments: file_path, start_line, end_line, new_text"
+                            .to_string(),
+                    )
                 }
             }
             "final_output" => {
