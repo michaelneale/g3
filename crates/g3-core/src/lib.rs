@@ -1493,6 +1493,8 @@ fn filter_json_tool_calls(content: &str) -> String {
         r#"{ "tool":"#,
         r#"{"tool" :"#,
         r#"{ "tool" :"#,
+        r#"{"tool": "#,  // Added pattern with space after colon
+        r#"{ "tool": "#, // Added pattern with spaces
     ];
 
     // Check if any pattern is found in the content
@@ -1500,23 +1502,30 @@ fn filter_json_tool_calls(content: &str) -> String {
 
     if has_tool_call_pattern {
         // If we detect a JSON tool call pattern anywhere in the content,
-        // replace the entire content with the indicator
-        "<<tool call detected>>".to_string()
+        // suppress it completely
+        "".to_string()
     } else {
         // Check for partial JSON patterns that might be split across chunks
         let trimmed = content.trim();
 
-        // Check for partial patterns that might indicate the start of a JSON tool call
+        // More comprehensive pattern matching for partial tool calls
         if trimmed.starts_with(r#"{"tool"#)
             || trimmed.starts_with(r#"{ "tool"#)
             || trimmed.starts_with(r#"{"#) && (trimmed.contains("tool") || trimmed.contains("args"))
             || trimmed.contains(r#""tool":"#)
+            || trimmed.contains(r#""tool": "#)
             || trimmed.contains(r#""args":"#)
+            || trimmed.contains(r#""args": "#)
             || trimmed.contains(r#"file_path"#)
             || trimmed.contains(r#"command"#)
+            || trimmed.contains(r#"content"#) && trimmed.contains(r#"""#) // Likely JSON string
+            || trimmed.contains(r#"summary"#) && trimmed.contains(r#"""#) // Likely JSON string
             || (trimmed.starts_with('{')
-                && trimmed.len() < 50
-                && (trimmed.contains("tool") || trimmed.contains("args")))
+                && trimmed.len() < 100 // Increased threshold
+                && (trimmed.contains("tool") || trimmed.contains("args") || trimmed.contains(r#"""#)))
+            // Catch malformed tool calls like: {"tool": "write_file", "path
+            || (trimmed.contains(r#""tool":"#) || trimmed.contains(r#""tool": "#))
+            || (trimmed.starts_with(r#"{"#) && trimmed.contains(r#"", ""#)) // JSON with quoted comma pattern
         {
             // This looks like part of a JSON tool call, suppress it
             "".to_string()
