@@ -959,6 +959,7 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                         // Check for tool calls - prioritize native tool calls over JSON parsing
                         let mut detected_tool_call = None;
+                        let mut is_text_based_tool_call = false;
 
                         // First check for native tool calls in the chunk
                         if let Some(ref tool_calls) = chunk.tool_calls {
@@ -985,6 +986,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                             detected_tool_call = parser.add_chunk(&chunk.content);
                             if detected_tool_call.is_some() {
                                 debug!("Found JSON tool call in text content for native provider");
+                                is_text_based_tool_call = true;
                             }
                         }
 
@@ -1032,6 +1034,20 @@ The tool will execute immediately and you'll receive the result (success or erro
                                     response_started = true;
                                 }
                                 print!("{}", new_content);
+                                io::stdout().flush()?;
+                            }
+
+                            // Check if this was a JSON tool call detected from text (not native)
+                            // If so, show a brief indicator that we detected a text-based tool call
+                            let provider = self.providers.get(None)?;
+                            if provider.has_native_tool_calling() && is_text_based_tool_call {
+                                // This means we detected a JSON tool call in text for a native provider
+                                // Show a brief indicator instead of the raw JSON
+                                if !response_started {
+                                    print!("\r🤖 "); // Clear thinking indicator and show response indicator
+                                    response_started = true;
+                                }
+                                print!("🔧 "); // Brief tool call indicator
                                 io::stdout().flush()?;
                             }
 
