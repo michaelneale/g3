@@ -425,7 +425,7 @@ impl Agent {
 
         // Create a specific prompt to split the task
         let split_prompt = format!(
-            "Analyze this request and split it into smaller tasks. \
+            "Analyze this request and split it into coarse-grained sub-tasks. \
              If the request is already simple enough, just return it as is. \
              Do not add numbering, bullets, or any other formatting - just the tasks, one per line.\n\n\
              Request: {}\n\n\
@@ -436,7 +436,7 @@ impl Agent {
         let messages = vec![
             Message {
                 role: MessageRole::System,
-                content: "You are a task decomposition assistant. Break down complex requests into logical sub-tasks.".to_string(),
+                content: "You are a task decomposition assistant. Break down complex requests into coarse-grained logical sub-tasks, no more than 6.".to_string(),
             },
             Message {
                 role: MessageRole::User,
