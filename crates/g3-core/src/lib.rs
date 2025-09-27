@@ -1169,7 +1169,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                             break;
                         } else {
                             // No tool call detected, continue streaming normally
-                            // Filter out stop tokens from the streaming output
+                            // But first check if we need to filter JSON tool calls from display
                             let clean_content = chunk
                                 .content
                                 .replace("<|im_end|>", "")
@@ -1178,17 +1178,23 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 .replace("<</SYS>>", "");
 
                             if !clean_content.is_empty() {
-                                // Replace thinking indicator with response indicator on first content
-                                if !response_started {
-                                    print!("\r🤖 "); // Clear thinking indicator and show response indicator
-                                    response_started = true;
-                                }
+                                // Filter out JSON tool calls from display
+                                let filtered_content = filter_json_tool_calls(&clean_content);
+                                
+                                // If we have any content to display
+                                if !filtered_content.is_empty() {
+                                    // Replace thinking indicator with response indicator on first content
+                                    if !response_started {
+                                        print!("\r🤖 "); // Clear thinking indicator and show response indicator
+                                        response_started = true;
+                                    }
 
-                                debug!("Printing clean content: '{}'", clean_content);
-                                print!("{}", clean_content);
-                                let _ = io::stdout().flush(); // Force immediate output
-                                debug!("Flushed {} characters to stdout", clean_content.len());
-                                current_response.push_str(&clean_content);
+                                    debug!("Printing filtered content: '{}'", filtered_content);
+                                    print!("{}", filtered_content);
+                                    let _ = io::stdout().flush(); // Force immediate output
+                                    debug!("Flushed {} characters to stdout", filtered_content.len());
+                                    current_response.push_str(&filtered_content);
+                                }
                             }
                         }
 
@@ -1503,6 +1509,48 @@ The tool will execute immediately and you'll receive the result (success or erro
             format!("{}m {:.1}s", minutes, remaining_seconds)
         }
     }
+}
+
+// Helper function to filter JSON tool calls from display content
+fn filter_json_tool_calls(content: &str) -> String {
+    let mut filtered_content = String::new();
+    let mut in_json_tool_call = false;
+    
+    for line in content.lines() {
+        let trimmed_line = line.trim_start();
+        
+        // Check if this line starts with a JSON tool call pattern
+        if trimmed_line.starts_with(r#"{"tool":"#) ||
+           trimmed_line.starts_with(r#"{ "tool":"#) ||
+           trimmed_line.starts_with(r#"{"tool" :"#) ||
+           trimmed_line.starts_with(r#"{ "tool" :"#) {
+            // This is the start of a JSON tool call
+            if !in_json_tool_call {
+                // First line of JSON tool call - replace with indicator
+                if !filtered_content.is_empty() {
+                    filtered_content.push('\n');
+                }
+                filtered_content.push_str("<<tool call detected>>");
+                in_json_tool_call = true;
+            }
+            // Skip this line and any subsequent lines that are part of the JSON
+        } else if in_json_tool_call {
+            // Check if this line ends the JSON tool call
+            if trimmed_line.ends_with('}') || trimmed_line.trim() == "}" {
+                // End of JSON tool call
+                in_json_tool_call = false;
+            }
+            // Skip this line (it's part of the JSON tool call)
+        } else {
+            // Regular content line - add it
+            if !filtered_content.is_empty() {
+                filtered_content.push('\n');
+            }
+            filtered_content.push_str(line);
+        }
+    }
+    
+    filtered_content
 }
 
 // Helper function to properly escape shell commands
