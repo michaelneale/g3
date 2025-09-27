@@ -1,36 +1,13 @@
-# Example configuration file for G3
-# Copy to ~/.config/g3/config.toml and customize
-
 [providers]
-default_provider = "embedded"
+default_provider = "databricks"
 
-[providers.openai]
-# Get your API key from https://platform.openai.com/api-keys
-api_key = "sk-your-openai-api-key-here"
-model = "gpt-4"
-# Optional: custom base URL for OpenAI-compatible APIs
-# base_url = "https://api.openai.com/v1"
-max_tokens = 2048
-temperature = 0.1
-
-[providers.anthropic]
-# Get your API key from https://console.anthropic.com/
-api_key = "your-anthropic-api-key-here"
-model = "claude-3-5-sonnet-20241022"
+[providers.databricks]
+host = "https://your-workspace.cloud.databricks.com"
+# token = "your-databricks-token"  # Optional - will use OAuth if not provided
+model = "databricks-claude-sonnet-4"
 max_tokens = 4096
 temperature = 0.1
-
-[providers.embedded]
-# Path to your GGUF model file
-model_path = "~/.cache/g3/models/codellama-7b-instruct.Q4_K_M.gguf"
-model_type = "codellama"
-context_length = 16384  # Use CodeLlama's full context capability
-max_tokens = 2048  # Default fallback, but will be calculated dynamically
-temperature = 0.1
-# Number of layers to offload to GPU (0 for CPU only)
-gpu_layers = 32
-# Number of CPU threads to use
-threads = 8
+use_oauth = true
 
 [agent]
 max_context_length = 8192

@@ -84,8 +84,11 @@ pub struct Tool {
 }
 
 pub mod anthropic;
+pub mod databricks;
+pub mod oauth;
 
 pub use anthropic::AnthropicProvider;
+pub use databricks::DatabricksProvider;
 
 /// Provider registry for managing multiple LLM providers
 pub struct ProviderRegistry {

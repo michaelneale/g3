@@ -12,6 +12,7 @@ pub struct Config {
 pub struct ProvidersConfig {
     pub openai: Option<OpenAIConfig>,
     pub anthropic: Option<AnthropicConfig>,
+    pub databricks: Option<DatabricksConfig>,
     pub embedded: Option<EmbeddedConfig>,
     pub default_provider: String,
 }
@@ -31,6 +32,16 @@ pub struct AnthropicConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub temperature: Option<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabricksConfig {
+    pub host: String,
+    pub token: Option<String>, // Optional - will use OAuth if not provided
+    pub model: String,
+    pub max_tokens: Option<u32>,
+    pub temperature: Option<f32>,
+    pub use_oauth: Option<bool>, // Default to true if token not provided
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,8 +68,16 @@ impl Default for Config {
             providers: ProvidersConfig {
                 openai: None,
                 anthropic: None,
+                databricks: Some(DatabricksConfig {
+                    host: "https://your-workspace.cloud.databricks.com".to_string(),
+                    token: None, // Will use OAuth by default
+                    model: "databricks-claude-sonnet-4".to_string(),
+                    max_tokens: Some(4096),
+                    temperature: Some(0.1),
+                    use_oauth: Some(true),
+                }),
                 embedded: None,
-                default_provider: "anthropic".to_string(),
+                default_provider: "databricks".to_string(),
             },
             agent: AgentConfig {
                 max_context_length: 8192,
@@ -88,9 +107,9 @@ impl Config {
             })
         };
         
-        // If no config exists, create and save a default Qwen config
+        // If no config exists, create and save a default Databricks config
         if !config_exists {
-            let qwen_config = Self::default_qwen_config();
+            let databricks_config = Self::default();
             
             // Save to default location
             let config_dir = dirs::home_dir()
@@ -105,13 +124,13 @@ impl Config {
             std::fs::create_dir_all(&config_dir).ok();
             
             let config_file = config_dir.join("config.toml");
-            if let Err(e) = qwen_config.save(config_file.to_str().unwrap()) {
+            if let Err(e) = databricks_config.save(config_file.to_str().unwrap()) {
                 eprintln!("Warning: Could not save default config: {}", e);
             } else {
-                println!("Created default Qwen configuration at: {}", config_file.display());
+                println!("Created default Databricks configuration at: {}", config_file.display());
             }
             
-            return Ok(qwen_config);
+            return Ok(databricks_config);
         }
         
         // Existing config loading logic
@@ -157,6 +176,7 @@ impl Config {
             providers: ProvidersConfig {
                 openai: None,
                 anthropic: None,
+                databricks: None,
                 embedded: Some(EmbeddedConfig {
                     model_path: "~/.cache/g3/models/qwen2.5-7b-instruct-q3_k_m.gguf".to_string(),
                     model_type: "qwen".to_string(),

@@ -303,6 +303,36 @@ impl Agent {
             }
         }
 
+        // Register Databricks provider if configured AND it's the default provider
+        if let Some(databricks_config) = &config.providers.databricks {
+            if config.providers.default_provider == "databricks" {
+                info!("Initializing Databricks provider (selected as default)");
+                
+                let databricks_provider = if let Some(token) = &databricks_config.token {
+                    // Use token-based authentication
+                    g3_providers::DatabricksProvider::from_token(
+                        databricks_config.host.clone(),
+                        token.clone(),
+                        databricks_config.model.clone(),
+                        databricks_config.max_tokens,
+                        databricks_config.temperature,
+                    )?
+                } else {
+                    // Use OAuth authentication
+                    g3_providers::DatabricksProvider::from_oauth(
+                        databricks_config.host.clone(),
+                        databricks_config.model.clone(),
+                        databricks_config.max_tokens,
+                        databricks_config.temperature,
+                    ).await?
+                };
+                
+                providers.register(databricks_provider);
+            } else {
+                info!("Databricks provider configured but not selected as default, skipping initialization");
+            }
+        }
+
         // Set default provider
         debug!(
             "Setting default provider to: {}",
@@ -352,7 +382,18 @@ impl Agent {
                 // Claude models have large context windows
                 200000 // Default for Claude models
             }
-
+            "databricks" => {
+                // Databricks models have varying context windows depending on the model
+                if model_name.contains("claude") {
+                    200000 // Claude models on Databricks have large context windows
+                } else if model_name.contains("llama") {
+                    32768 // Llama models typically support 32k context
+                } else if model_name.contains("dbrx") {
+                    32768 // DBRX supports 32k context
+                } else {
+                    16384 // Conservative default for other Databricks models
+                }
+            }
             _ => config.agent.max_context_length as u32,
         };
 
