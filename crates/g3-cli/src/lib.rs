@@ -5,7 +5,7 @@ use g3_core::Agent;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::fs::OpenOptions;
-use std::io::{Write, BufWriter};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
@@ -45,7 +45,7 @@ pub async fn run() -> Result<()> {
 
     // Initialize logging with filtering
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-    
+
     // Create a filter that suppresses llama_cpp logs unless in verbose mode
     let filter = if cli.verbose {
         EnvFilter::from_default_env()
@@ -223,25 +223,30 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
     // Set up workspace directory
     let workspace_dir = setup_workspace_directory()?;
-    
+
     // Set up logging
     let logger = AutonomousLogger::new(&workspace_dir)?;
-    
+
     logger.log_section("G3 AUTONOMOUS MODE SESSION STARTED");
     logger.log(&format!("🤖 G3 AI Coding Agent - Autonomous Mode"));
-    logger.log(&format!("📁 Using workspace directory: {}", workspace_dir.display()));
-    
+    logger.log(&format!(
+        "📁 Using workspace directory: {}",
+        workspace_dir.display()
+    ));
+
     // Change to workspace directory
     std::env::set_current_dir(&workspace_dir)?;
     logger.log("📂 Changed to workspace directory");
-    
+
     logger.log("🎯 Looking for requirements.md in workspace directory...");
 
     // Check if requirements.md exists
     let requirements_path = workspace_dir.join("requirements.md");
     if !requirements_path.exists() {
         logger.log("❌ Error: requirements.md not found in workspace directory");
-        logger.log(&format!("   Please create a requirements.md file with your project requirements at:"));
+        logger.log(&format!(
+            "   Please create a requirements.md file with your project requirements at:"
+        ));
         logger.log(&format!("   {}", requirements_path.display()));
         return Ok(());
     }
@@ -256,11 +261,14 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
     };
 
     logger.log("📋 Requirements loaded from requirements.md");
-    logger.log(&format!("Requirements: {}", logger.truncate_for_log(&requirements, 150)));
-    
+    logger.log(&format!(
+        "Requirements: {}",
+        logger.truncate_for_log(&requirements, 150)
+    ));
+
     // Check if there are existing project files (skip first player turn if so)
     let has_existing_files = check_existing_project_files(&workspace_dir, &logger)?;
-    
+
     logger.log("🔄 Starting coach-player feedback loop...");
     logger.log("");
 
@@ -272,12 +280,15 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
     loop {
         // Skip player turn if we have existing files and this is the first iteration
         if skip_player_turn {
-            logger.log_section(&format!("TURN {}/{} - SKIPPING PLAYER MODE", turn, MAX_TURNS));
+            logger.log_section(&format!(
+                "TURN {}/{} - SKIPPING PLAYER MODE",
+                turn, MAX_TURNS
+            ));
             logger.log("📁 Existing project files detected, skipping to coach evaluation");
             skip_player_turn = false; // Only skip the first turn
         } else {
             logger.log_section(&format!("TURN {}/{} - PLAYER MODE", turn, MAX_TURNS));
-            
+
             // Player mode: implement requirements (with coach feedback if available)
             let player_prompt = if coach_feedback.is_empty() {
                 format!(
@@ -308,12 +319,12 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
         // Make sure the coach agent also operates in the workspace directory
         let config = g3_config::Config::load(None)?;
         let mut coach_agent = Agent::new(config).await?;
-        
+
         // Ensure coach agent is also in the workspace directory
         std::env::set_current_dir(&workspace_dir)?;
 
         logger.log_section(&format!("TURN {}/{} - COACH MODE", turn, MAX_TURNS));
-        
+
         // Coach mode: critique the implementation
         let coach_prompt = format!(
             "You are G3 in coach mode. Your role is to critique and review implementations against requirements.
@@ -328,7 +339,8 @@ Review the current state of the project and provide a concise critique focusing 
 3. Specific improvements needed
 
 If the implementation correctly meets all requirements, respond with: 'IMPLEMENTATION_APPROVED'
-If improvements are needed, provide specific actionable feedback.
+If improvements are needed, provide specific actionable feedback. Don't be overly critical. APPROVE the
+implementation if it generally fits the bill, doesn't have compile errors or glaring omissions.
 
 Keep your response concise and focused on actionable items.",
             requirements
@@ -362,9 +374,12 @@ Keep your response concise and focused on actionable items.",
         // Store coach feedback for next iteration
         coach_feedback = coach_result;
         turn += 1;
-        
+
         logger.log("🔄 Coach provided feedback for next iteration");
-        logger.log(&format!("📝 Preparing to incorporate feedback in turn {}", turn));
+        logger.log(&format!(
+            "📝 Preparing to incorporate feedback in turn {}",
+            turn
+        ));
         logger.log("");
     }
 
@@ -374,9 +389,12 @@ Keep your response concise and focused on actionable items.",
 
 /// Check if there are existing project files in the workspace directory
 /// Returns true if project files are found (excluding requirements.md and logs directory)
-fn check_existing_project_files(workspace_dir: &PathBuf, logger: &AutonomousLogger) -> Result<bool> {
+fn check_existing_project_files(
+    workspace_dir: &PathBuf,
+    logger: &AutonomousLogger,
+) -> Result<bool> {
     logger.log("🔍 Checking for existing project files...");
-    
+
     let entries = match std::fs::read_dir(workspace_dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -384,24 +402,25 @@ fn check_existing_project_files(workspace_dir: &PathBuf, logger: &AutonomousLogg
             return Ok(false);
         }
     };
-    
+
     let mut project_files = Vec::new();
     let mut total_files = 0;
-    
+
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        let file_name = path.file_name()
+        let file_name = path
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown");
-        
+
         // Skip requirements.md, logs directory, and hidden files
         if file_name == "requirements.md" || file_name == "logs" || file_name.starts_with('.') {
             continue;
         }
-        
+
         total_files += 1;
-        
+
         // Collect project files for logging (limit to first 5)
         if project_files.len() < 5 {
             if path.is_dir() {
@@ -411,12 +430,16 @@ fn check_existing_project_files(workspace_dir: &PathBuf, logger: &AutonomousLogg
             }
         }
     }
-    
+
     if total_files > 0 {
         logger.log(&format!("📁 Found {} existing project files", total_files));
         if !project_files.is_empty() {
             let files_display = if total_files > 5 {
-                format!("{} (and {} more)", project_files.join(", "), total_files - 5)
+                format!(
+                    "{} (and {} more)",
+                    project_files.join(", "),
+                    total_files - 5
+                )
             } else {
                 project_files.join(", ")
             };
@@ -465,7 +488,10 @@ fn setup_workspace_directory() -> Result<PathBuf> {
     // Create the directory if it doesn't exist
     if !workspace_dir.exists() {
         std::fs::create_dir_all(&workspace_dir)?;
-        println!("📁 Created workspace directory: {}", workspace_dir.display());
+        println!(
+            "📁 Created workspace directory: {}",
+            workspace_dir.display()
+        );
     }
 
     Ok(workspace_dir)
@@ -483,29 +509,29 @@ impl AutonomousLogger {
         if !logs_dir.exists() {
             std::fs::create_dir_all(&logs_dir)?;
         }
-        
+
         // Create log file with timestamp in logs subdirectory
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let log_path = logs_dir.join(format!("g3_autonomous_{}.log", timestamp));
-        
+
         let file = OpenOptions::new()
             .create(true)
             .write(true)
             .append(true)
             .open(&log_path)?;
-        
+
         let log_writer = Arc::new(Mutex::new(BufWriter::new(file)));
-        
+
         println!("📝 Logging autonomous session to: {}", log_path.display());
-        
+
         Ok(Self { log_writer })
     }
-    
+
     /// Truncate text to a single line for logging
     fn truncate_for_log(&self, text: &str, max_chars: usize) -> String {
         // First, get the first line only
         let first_line = text.lines().next().unwrap_or("").trim();
-        
+
         // Then truncate if too long
         if first_line.len() <= max_chars {
             first_line.to_string()
@@ -513,14 +539,14 @@ impl AutonomousLogger {
             format!("{}...", &first_line[..max_chars.saturating_sub(3)])
         }
     }
-    
+
     fn log(&self, message: &str) {
         // Ensure single line for console output
         let single_line_message = self.truncate_for_log(message, 200);
-        
+
         // Print to console
         println!("{}", single_line_message);
-        
+
         // Write to log file with timestamp (also single line)
         if let Ok(mut writer) = self.log_writer.lock() {
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
@@ -528,17 +554,17 @@ impl AutonomousLogger {
             let _ = writer.flush();
         }
     }
-    
+
     fn log_section(&self, section: &str) {
         // Sections can be multi-line for visual separation, but content should be single line
         let single_line_section = self.truncate_for_log(section, 100);
         let separator = "=".repeat(80);
-        
+
         // Print to console with visual formatting
         println!("{}", separator);
         println!("{}", single_line_section);
         println!("{}", separator);
-        
+
         // Log to file as single entries
         if let Ok(mut writer) = self.log_writer.lock() {
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
@@ -546,16 +572,16 @@ impl AutonomousLogger {
             let _ = writer.flush();
         }
     }
-    
+
     fn log_subsection(&self, subsection: &str) {
         let single_line_subsection = self.truncate_for_log(subsection, 100);
         let separator = "-".repeat(60);
-        
+
         // Print to console with visual formatting
         println!("{}", separator);
         println!("{}", single_line_subsection);
         println!("{}", separator);
-        
+
         // Log to file as single entry
         if let Ok(mut writer) = self.log_writer.lock() {
             let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
@@ -564,5 +590,3 @@ impl AutonomousLogger {
         }
     }
 }
-
-

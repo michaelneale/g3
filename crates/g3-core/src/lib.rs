@@ -1409,44 +1409,41 @@ The tool will execute immediately and you'll receive the result (success or erro
 
 // Helper function to filter JSON tool calls from display content
 fn filter_json_tool_calls(content: &str) -> String {
-    let mut filtered_content = String::new();
-    let mut in_json_tool_call = false;
+    // Check if content contains any JSON tool call patterns
+    let patterns = [
+        r#"{"tool":"#,
+        r#"{ "tool":"#,
+        r#"{"tool" :"#,
+        r#"{ "tool" :"#,
+    ];
     
-    for line in content.lines() {
-        let trimmed_line = line.trim_start();
+    // Check if any pattern is found in the content
+    let has_tool_call_pattern = patterns.iter().any(|pattern| content.contains(pattern));
+    
+    if has_tool_call_pattern {
+        // If we detect a JSON tool call pattern anywhere in the content, 
+        // replace the entire content with the indicator
+        "<<tool call detected>>".to_string()
+    } else {
+        // Check for partial JSON patterns that might be split across chunks
+        let trimmed = content.trim();
         
-        // Check if this line starts with a JSON tool call pattern
-        if trimmed_line.starts_with(r#"{"tool":"#) ||
-           trimmed_line.starts_with(r#"{ "tool":"#) ||
-           trimmed_line.starts_with(r#"{"tool" :"#) ||
-           trimmed_line.starts_with(r#"{ "tool" :"#) {
-            // This is the start of a JSON tool call
-            if !in_json_tool_call {
-                // First line of JSON tool call - replace with indicator
-                if !filtered_content.is_empty() {
-                    filtered_content.push('\n');
-                }
-                filtered_content.push_str("<<tool call detected>>");
-                in_json_tool_call = true;
-            }
-            // Skip this line and any subsequent lines that are part of the JSON
-        } else if in_json_tool_call {
-            // Check if this line ends the JSON tool call
-            if trimmed_line.ends_with('}') || trimmed_line.trim() == "}" {
-                // End of JSON tool call
-                in_json_tool_call = false;
-            }
-            // Skip this line (it's part of the JSON tool call)
+        // Check for partial patterns that might indicate the start of a JSON tool call
+        if trimmed.starts_with(r#"{"tool"#) ||
+           trimmed.starts_with(r#"{ "tool"#) ||
+           trimmed.starts_with(r#"{"#) && (trimmed.contains("tool") || trimmed.contains("args")) ||
+           trimmed.contains(r#""tool":"#) ||
+           trimmed.contains(r#""args":"#) ||
+           trimmed.contains(r#"file_path"#) ||
+           trimmed.contains(r#"command"#) ||
+           (trimmed.starts_with('{') && trimmed.len() < 50 && (trimmed.contains("tool") || trimmed.contains("args"))) {
+            // This looks like part of a JSON tool call, suppress it
+            "".to_string()
         } else {
-            // Regular content line - add it
-            if !filtered_content.is_empty() {
-                filtered_content.push('\n');
-            }
-            filtered_content.push_str(line);
+            // Regular content, return as-is
+            content.to_string()
         }
     }
-    
-    filtered_content
 }
 
 // Helper function to properly escape shell commands
