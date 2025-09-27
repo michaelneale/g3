@@ -307,7 +307,7 @@ impl Agent {
         if let Some(databricks_config) = &config.providers.databricks {
             if config.providers.default_provider == "databricks" {
                 info!("Initializing Databricks provider (selected as default)");
-                
+
                 let databricks_provider = if let Some(token) = &databricks_config.token {
                     // Use token-based authentication
                     g3_providers::DatabricksProvider::from_token(
@@ -324,9 +324,10 @@ impl Agent {
                         databricks_config.model.clone(),
                         databricks_config.max_tokens,
                         databricks_config.temperature,
-                    ).await?
+                    )
+                    .await?
                 };
-                
+
                 providers.register(databricks_provider);
             } else {
                 info!("Databricks provider configured but not selected as default, skipping initialization");
@@ -851,7 +852,7 @@ The tool will execute immediately and you'll receive the result (success or erro
         let stream_start = Instant::now();
         let mut total_execution_time = Duration::new(0, 0);
         let mut iteration_count = 0;
-        const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
+        const MAX_ITERATIONS: usize = 30; // Prevent infinite loops
         let mut response_started = false;
 
         loop {
