@@ -739,7 +739,7 @@ The tool will execute immediately and you'll receive the result (success or erro
             },
             Tool {
                 name: "write_file".to_string(),
-                description: "Write content to a file (creates or overwrites)".to_string(),
+                description: "Write content to a file (creates or overwrites). You MUST provide all arguments".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -789,7 +789,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                     "properties": {
                         "summary": {
                             "type": "string",
-                            "description": "A detailed summary of what was accomplished"
+                            "description": "A detailed summary in markdown of what was accomplished"
                         }
                     },
                     "required": ["summary"]
@@ -1000,7 +1000,11 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             // Track tool call metrics
                             let tool_success = !tool_result.contains("❌");
-                            self.tool_call_metrics.push((tool_call.tool.clone(), exec_duration, tool_success));
+                            self.tool_call_metrics.push((
+                                tool_call.tool.clone(),
+                                exec_duration,
+                                tool_success,
+                            ));
 
                             // Display tool execution result with proper indentation
                             let output_lines: Vec<&str> = tool_result.lines().collect();
@@ -1095,7 +1099,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                             if !clean_content.is_empty() {
                                 // Filter out JSON tool calls from display
                                 let filtered_content = filter_json_tool_calls(&clean_content);
-                                
+
                                 // If we have any content to display
                                 if !filtered_content.is_empty() {
                                     // Replace thinking indicator with response indicator on first content
@@ -1107,7 +1111,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                                     debug!("Printing filtered content: '{}'", filtered_content);
                                     print!("{}", filtered_content);
                                     let _ = io::stdout().flush(); // Force immediate output
-                                    debug!("Flushed {} characters to stdout", filtered_content.len());
+                                    debug!(
+                                        "Flushed {} characters to stdout",
+                                        filtered_content.len()
+                                    );
                                     current_response.push_str(&filtered_content);
                                 }
                             }
@@ -1226,8 +1233,12 @@ The tool will execute immediately and you'll receive the result (success or erro
             "write_file" => {
                 debug!("Processing write_file tool call");
                 debug!("Raw tool_call.args: {:?}", tool_call.args);
-                debug!("Args as JSON: {}", serde_json::to_string(&tool_call.args).unwrap_or_else(|_| "failed to serialize".to_string()));
-                
+                debug!(
+                    "Args as JSON: {}",
+                    serde_json::to_string(&tool_call.args)
+                        .unwrap_or_else(|_| "failed to serialize".to_string())
+                );
+
                 let file_path = tool_call.args.get("file_path");
                 let content = tool_call.args.get("content");
 
@@ -1441,27 +1452,30 @@ fn filter_json_tool_calls(content: &str) -> String {
         r#"{"tool" :"#,
         r#"{ "tool" :"#,
     ];
-    
+
     // Check if any pattern is found in the content
     let has_tool_call_pattern = patterns.iter().any(|pattern| content.contains(pattern));
-    
+
     if has_tool_call_pattern {
-        // If we detect a JSON tool call pattern anywhere in the content, 
+        // If we detect a JSON tool call pattern anywhere in the content,
         // replace the entire content with the indicator
         "<<tool call detected>>".to_string()
     } else {
         // Check for partial JSON patterns that might be split across chunks
         let trimmed = content.trim();
-        
+
         // Check for partial patterns that might indicate the start of a JSON tool call
-        if trimmed.starts_with(r#"{"tool"#) ||
-           trimmed.starts_with(r#"{ "tool"#) ||
-           trimmed.starts_with(r#"{"#) && (trimmed.contains("tool") || trimmed.contains("args")) ||
-           trimmed.contains(r#""tool":"#) ||
-           trimmed.contains(r#""args":"#) ||
-           trimmed.contains(r#"file_path"#) ||
-           trimmed.contains(r#"command"#) ||
-           (trimmed.starts_with('{') && trimmed.len() < 50 && (trimmed.contains("tool") || trimmed.contains("args"))) {
+        if trimmed.starts_with(r#"{"tool"#)
+            || trimmed.starts_with(r#"{ "tool"#)
+            || trimmed.starts_with(r#"{"#) && (trimmed.contains("tool") || trimmed.contains("args"))
+            || trimmed.contains(r#""tool":"#)
+            || trimmed.contains(r#""args":"#)
+            || trimmed.contains(r#"file_path"#)
+            || trimmed.contains(r#"command"#)
+            || (trimmed.starts_with('{')
+                && trimmed.len() < 50
+                && (trimmed.contains("tool") || trimmed.contains("args")))
+        {
             // This looks like part of a JSON tool call, suppress it
             "".to_string()
         } else {
