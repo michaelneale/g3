@@ -8,6 +8,7 @@ use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
@@ -220,12 +221,309 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
     Ok(())
 }
 
+/// Metrics tracking for autonomous mode sessions
+#[derive(Debug, Clone)]
+struct TurnMetrics {
+    turn_number: usize,
+    role: String, // "player" or "coach"
+    start_time: Instant,
+    duration: Duration,
+    tokens_used: u32,
+    tool_calls: Vec<ToolCallMetric>,
+    success: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ToolCallMetric {
+    tool_name: String,
+    duration: Duration,
+    success: bool,
+}
+
+#[derive(Debug)]
+struct SessionMetrics {
+    session_start: Instant,
+    total_duration: Duration,
+    turns: Vec<TurnMetrics>,
+    total_tokens: u32,
+    total_tool_calls: usize,
+    successful_completion: bool,
+}
+
+impl SessionMetrics {
+    fn new() -> Self {
+        Self {
+            session_start: Instant::now(),
+            total_duration: Duration::default(),
+            turns: Vec::new(),
+            total_tokens: 0,
+            total_tool_calls: 0,
+            successful_completion: false,
+        }
+    }
+
+    fn add_turn(&mut self, turn: TurnMetrics) {
+        self.total_tokens += turn.tokens_used;
+        self.total_tool_calls += turn.tool_calls.len();
+        self.turns.push(turn);
+    }
+
+    fn finalize(&mut self, successful: bool) {
+        self.total_duration = self.session_start.elapsed();
+        self.successful_completion = successful;
+    }
+
+    fn generate_summary(&self) -> String {
+        let mut summary = String::new();
+
+        // Header
+        summary.push_str(
+            "╔═══════════════════════════════════════════════════════════════════════════════╗\n",
+        );
+        summary.push_str(
+            "║                          G3 AUTONOMOUS SESSION SUMMARY                        ║\n",
+        );
+        summary.push_str(
+            "╚═══════════════════════════════════════════════════════════════════════════════╝\n\n",
+        );
+
+        // Overall metrics
+        summary.push_str("📊 OVERALL METRICS\n");
+        summary.push_str(&format!(
+            "   Total Duration: {}\n",
+            format_duration(self.total_duration)
+        ));
+        summary.push_str(&format!("   Total Turns: {}\n", self.turns.len()));
+        summary.push_str(&format!("   Total Tokens: {}\n", self.total_tokens));
+        summary.push_str(&format!("   Total Tool Calls: {}\n", self.total_tool_calls));
+        summary.push_str(&format!(
+            "   Success: {}\n",
+            if self.successful_completion {
+                "✅ Yes"
+            } else {
+                "❌ No"
+            }
+        ));
+
+        // Efficiency metrics
+        if !self.turns.is_empty() {
+            let avg_duration = self.total_duration / self.turns.len() as u32;
+            let avg_tokens = self.total_tokens / self.turns.len() as u32;
+            summary.push_str(&format!(
+                "   Avg Turn Duration: {}\n",
+                format_duration(avg_duration)
+            ));
+            summary.push_str(&format!("   Avg Tokens/Turn: {}\n", avg_tokens));
+        }
+        summary.push_str("\n");
+
+        // Turn-by-turn breakdown
+        summary.push_str("🔄 TURN-BY-TURN BREAKDOWN\n");
+        for turn in &self.turns {
+            let role_icon = if turn.role == "player" {
+                "🎯"
+            } else {
+                "🎓"
+            };
+            summary.push_str(&format!(
+                "   {} Turn {} ({}): {} | {} tokens | {} tools | {}\n",
+                role_icon,
+                turn.turn_number,
+                turn.role.to_uppercase(),
+                format_duration(turn.duration),
+                turn.tokens_used,
+                turn.tool_calls.len(),
+                if turn.success { "✅" } else { "❌" }
+            ));
+        }
+        summary.push_str("\n");
+
+        // Token consumption graph
+        summary.push_str("📈 TOKEN CONSUMPTION GRAPH\n");
+        summary.push_str(&self.generate_token_graph());
+        summary.push_str("\n");
+
+        // Tool usage statistics
+        summary.push_str("🔧 TOOL USAGE STATISTICS\n");
+        summary.push_str(&self.generate_tool_stats());
+        summary.push_str("\n");
+
+        // Performance insights
+        summary.push_str("💡 PERFORMANCE INSIGHTS\n");
+        summary.push_str(&self.generate_insights());
+
+        summary
+    }
+
+    fn generate_token_graph(&self) -> String {
+        let mut graph = String::new();
+
+        if self.turns.is_empty() {
+            return "   No data available\n".to_string();
+        }
+
+        let max_tokens = self.turns.iter().map(|t| t.tokens_used).max().unwrap_or(1);
+        let scale = if max_tokens > 50 { max_tokens / 50 } else { 1 };
+
+        for turn in &self.turns {
+            let bar_length = (turn.tokens_used / scale).min(50) as usize;
+            let bar = "█".repeat(bar_length);
+            let role_icon = if turn.role == "player" {
+                "🎯"
+            } else {
+                "🎓"
+            };
+
+            graph.push_str(&format!(
+                "   {} T{:<2} |{:<50}| {} tokens\n",
+                role_icon, turn.turn_number, bar, turn.tokens_used
+            ));
+        }
+
+        if scale > 1 {
+            graph.push_str(&format!("   Scale: 1 █ = {} tokens\n", scale));
+        }
+
+        graph
+    }
+
+    fn generate_tool_stats(&self) -> String {
+        let mut stats = String::new();
+        let mut tool_counts: std::collections::HashMap<String, (usize, usize, Duration)> =
+            std::collections::HashMap::new();
+
+        // Collect tool statistics
+        for turn in &self.turns {
+            for tool in &turn.tool_calls {
+                let entry = tool_counts.entry(tool.tool_name.clone()).or_insert((
+                    0,
+                    0,
+                    Duration::default(),
+                ));
+                entry.0 += 1; // total count
+                if tool.success {
+                    entry.1 += 1; // success count
+                }
+                entry.2 += tool.duration; // total duration
+            }
+        }
+
+        if tool_counts.is_empty() {
+            return "   No tool calls recorded\n".to_string();
+        }
+
+        // Sort by usage count
+        let mut sorted_tools: Vec<_> = tool_counts.iter().collect();
+        sorted_tools.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+
+        for (tool_name, (total, success, duration)) in sorted_tools {
+            let success_rate = if *total > 0 {
+                (*success as f32 / *total as f32) * 100.0
+            } else {
+                0.0
+            };
+            let avg_duration = if *total > 0 {
+                *duration / *total as u32
+            } else {
+                Duration::default()
+            };
+
+            stats.push_str(&format!(
+                "   {:<12} | {:>3} calls | {:>5.1}% success | {} avg\n",
+                tool_name,
+                total,
+                success_rate,
+                format_duration(avg_duration)
+            ));
+        }
+
+        stats
+    }
+
+    fn generate_insights(&self) -> String {
+        let mut insights = String::new();
+
+        if self.turns.is_empty() {
+            return "   No data available for insights\n".to_string();
+        }
+
+        // Completion insight
+        if self.successful_completion {
+            insights.push_str("   ✅ Session completed successfully with coach approval\n");
+        } else {
+            insights.push_str("   ⚠️  Session ended without coach approval (max turns reached)\n");
+        }
+
+        // Turn efficiency
+        let player_turns: Vec<_> = self.turns.iter().filter(|t| t.role == "player").collect();
+        let coach_turns: Vec<_> = self.turns.iter().filter(|t| t.role == "coach").collect();
+
+        if !player_turns.is_empty() && !coach_turns.is_empty() {
+            let avg_player_tokens =
+                player_turns.iter().map(|t| t.tokens_used).sum::<u32>() / player_turns.len() as u32;
+            let avg_coach_tokens =
+                coach_turns.iter().map(|t| t.tokens_used).sum::<u32>() / coach_turns.len() as u32;
+
+            insights.push_str(&format!(
+                "   📊 Player turns averaged {} tokens, Coach turns averaged {} tokens\n",
+                avg_player_tokens, avg_coach_tokens
+            ));
+        }
+
+        // Tool usage insight
+        let total_tools = self.turns.iter().map(|t| t.tool_calls.len()).sum::<usize>();
+        if total_tools > 0 {
+            let avg_tools_per_turn = total_tools as f32 / self.turns.len() as f32;
+            insights.push_str(&format!(
+                "   🔧 Average of {:.1} tool calls per turn\n",
+                avg_tools_per_turn
+            ));
+        }
+
+        // Time distribution
+        let total_player_time: Duration = player_turns.iter().map(|t| t.duration).sum();
+        let total_coach_time: Duration = coach_turns.iter().map(|t| t.duration).sum();
+        let total_time = total_player_time + total_coach_time;
+
+        if total_time > Duration::default() {
+            let player_percent =
+                (total_player_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0;
+            let coach_percent = (total_coach_time.as_secs_f32() / total_time.as_secs_f32()) * 100.0;
+
+            insights.push_str(&format!(
+                "   ⏱️  Time split: {:.1}% implementation, {:.1}% review\n",
+                player_percent, coach_percent
+            ));
+        }
+
+        insights
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let total_secs = duration.as_secs();
+    if total_secs < 60 {
+        format!("{}s", total_secs)
+    } else if total_secs < 3600 {
+        let mins = total_secs / 60;
+        let secs = total_secs % 60;
+        format!("{}m{}s", mins, secs)
+    } else {
+        let hours = total_secs / 3600;
+        let mins = (total_secs % 3600) / 60;
+        format!("{}h{}m", hours, mins)
+    }
+}
+
 async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
     // Set up workspace directory
     let workspace_dir = setup_workspace_directory()?;
 
     // Set up logging
     let logger = AutonomousLogger::new(&workspace_dir)?;
+
+    // Initialize session metrics
+    let mut session_metrics = SessionMetrics::new();
 
     logger.log_section("G3 AUTONOMOUS MODE SESSION STARTED");
     logger.log(&format!("🤖 G3 AI Coding Agent - Autonomous Mode"));
@@ -276,6 +574,7 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
     let mut turn = 1;
     let mut coach_feedback = String::new();
     let mut skip_player_turn = has_existing_files;
+    let mut implementation_approved = false;
 
     loop {
         // Skip player turn if we have existing files and this is the first iteration
@@ -307,9 +606,46 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool) ->
                 logger.log("📝 Incorporating coach feedback from previous turn");
             }
 
-            let _player_result = agent
+            // Track player turn metrics
+            let player_start = Instant::now();
+            let initial_tokens = agent.get_context_window().used_tokens;
+
+            let player_result = agent
                 .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
-                .await?;
+                .await;
+
+            let player_duration = player_start.elapsed();
+            let final_tokens = agent.get_context_window().used_tokens;
+            let tokens_used = final_tokens.saturating_sub(initial_tokens);
+
+            let player_success = player_result.is_ok();
+            if let Err(e) = player_result {
+                logger.log(&format!("❌ Player implementation failed: {}", e));
+            }
+
+            // Extract tool call metrics from the agent
+            let player_tool_metrics: Vec<ToolCallMetric> = agent
+                .get_tool_call_metrics()
+                .iter()
+                .map(|(tool_name, duration, success)| ToolCallMetric {
+                    tool_name: tool_name.clone(),
+                    duration: *duration,
+                    success: *success,
+                })
+                .collect();
+
+            // Create player turn metrics
+            let player_turn = TurnMetrics {
+                turn_number: turn,
+                role: "player".to_string(),
+                start_time: player_start,
+                duration: player_duration,
+                tokens_used,
+                tool_calls: player_tool_metrics,
+                success: player_success,
+            };
+
+            session_metrics.add_turn(player_turn);
 
             logger.log("🎯 Player implementation completed");
             logger.log("");
@@ -348,9 +684,41 @@ Keep your response concise and focused on actionable items.",
 
         logger.log("🎓 Starting coach review...");
 
+        // Track coach turn metrics
+        let coach_start = Instant::now();
+        let initial_coach_tokens = coach_agent.get_context_window().used_tokens;
+
         let coach_result = coach_agent
             .execute_task_with_timing(&coach_prompt, None, false, show_prompt, show_code, true)
             .await?;
+
+        let coach_duration = coach_start.elapsed();
+        let final_coach_tokens = coach_agent.get_context_window().used_tokens;
+        let coach_tokens_used = final_coach_tokens.saturating_sub(initial_coach_tokens);
+
+        // Extract tool call metrics from the coach agent
+        let coach_tool_metrics: Vec<ToolCallMetric> = coach_agent
+            .get_tool_call_metrics()
+            .iter()
+            .map(|(tool_name, duration, success)| ToolCallMetric {
+                tool_name: tool_name.clone(),
+                duration: *duration,
+                success: *success,
+            })
+            .collect();
+
+        // Create coach turn metrics
+        let coach_turn = TurnMetrics {
+            turn_number: turn,
+            role: "coach".to_string(),
+            start_time: coach_start,
+            duration: coach_duration,
+            tokens_used: coach_tokens_used,
+            tool_calls: coach_tool_metrics,
+            success: true, // Coach execution succeeded if we got here
+        };
+
+        session_metrics.add_turn(coach_turn);
 
         logger.log("🎓 Coach review completed");
         logger.log(&format!("Coach feedback: {}", coach_result));
@@ -359,7 +727,7 @@ Keep your response concise and focused on actionable items.",
         if coach_result.contains("IMPLEMENTATION_APPROVED") {
             logger.log_section("SESSION COMPLETED - IMPLEMENTATION APPROVED");
             logger.log("✅ Coach approved the implementation!");
-            logger.log("🎉 Autonomous mode completed successfully");
+            implementation_approved = true;
             break;
         }
 
@@ -383,7 +751,25 @@ Keep your response concise and focused on actionable items.",
         logger.log("");
     }
 
+    // Finalize session metrics
+    session_metrics.finalize(implementation_approved);
+
+    // Generate and display comprehensive summary
     logger.log_section("G3 AUTONOMOUS MODE SESSION ENDED");
+
+    if implementation_approved {
+        logger.log("🎉 Autonomous mode completed successfully");
+    }
+
+    // Display the comprehensive metrics summary
+    println!("\n{}", session_metrics.generate_summary());
+
+    // Also log the summary to file
+    let summary = session_metrics.generate_summary();
+    for line in summary.lines() {
+        logger.log(line);
+    }
+
     Ok(())
 }
 
@@ -527,16 +913,18 @@ impl AutonomousLogger {
         Ok(Self { log_writer })
     }
 
-    /// Truncate text to a single line for logging
+    /// Truncate text to a single line for logging (UTF-8 safe)
     fn truncate_for_log(&self, text: &str, max_chars: usize) -> String {
         // First, get the first line only
         let first_line = text.lines().next().unwrap_or("").trim();
 
-        // Then truncate if too long
-        if first_line.len() <= max_chars {
+        // Then truncate if too long (using char boundaries to avoid UTF-8 panics)
+        if first_line.chars().count() <= max_chars {
             first_line.to_string()
         } else {
-            format!("{}...", &first_line[..max_chars.saturating_sub(3)])
+            // Use char indices to ensure we don't split UTF-8 characters
+            let truncated: String = first_line.chars().take(max_chars.saturating_sub(3)).collect();
+            format!("{}...", truncated)
         }
     }
 

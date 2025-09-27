@@ -258,6 +258,7 @@ pub struct Agent {
     providers: ProviderRegistry,
     context_window: ContextWindow,
     session_id: Option<String>,
+    tool_call_metrics: Vec<(String, Duration, bool)>, // (tool_name, duration, success)
 }
 
 impl Agent {
@@ -318,6 +319,7 @@ impl Agent {
             providers,
             context_window,
             session_id: None,
+            tool_call_metrics: Vec::new(),
         })
     }
 
@@ -693,6 +695,10 @@ The tool will execute immediately and you'll receive the result (success or erro
         &self.context_window
     }
 
+    pub fn get_tool_call_metrics(&self) -> &Vec<(String, Duration, bool)> {
+        &self.tool_call_metrics
+    }
+
     async fn stream_completion(
         &mut self,
         request: CompletionRequest,
@@ -982,6 +988,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                             let tool_result = self.execute_tool(&tool_call).await?;
                             let exec_duration = exec_start.elapsed();
                             total_execution_time += exec_duration;
+
+                            // Track tool call metrics
+                            let tool_success = !tool_result.contains("❌");
+                            self.tool_call_metrics.push((tool_call.tool.clone(), exec_duration, tool_success));
 
                             // Display tool execution result with proper indentation
                             let output_lines: Vec<&str> = tool_result.lines().collect();
