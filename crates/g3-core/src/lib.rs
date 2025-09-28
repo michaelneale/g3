@@ -1086,11 +1086,15 @@ The tool will execute immediately and you'll receive the result (success or erro
                         }
 
                         if chunk.finished {
-                            // Stream finished naturally without tool calls
-                            full_response.push_str(&current_response);
-                            println!();
-                            let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
-                            return Ok((full_response, ttft));
+                            // Stream finished - check if we should continue or return
+                            if !tool_executed {
+                                // No tools were executed in this iteration, we're done
+                                full_response.push_str(&current_response);
+                                println!();
+                                let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
+                                return Ok((full_response, ttft));
+                            }
+                            break; // Tool was executed, break to continue outer loop
                         }
                     }
                     Err(e) => {
