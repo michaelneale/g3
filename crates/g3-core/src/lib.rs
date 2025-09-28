@@ -1,3 +1,4 @@
+pub mod project;
 use anyhow::Result;
 use g3_config::Config;
 use g3_execution::CodeExecutor;

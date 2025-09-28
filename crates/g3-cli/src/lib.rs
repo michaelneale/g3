@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use g3_config::Config;
-use g3_core::Agent;
+use g3_core::{Agent, project::Project};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::fs::OpenOptions;
@@ -32,6 +32,10 @@ pub struct Cli {
     /// Configuration file path
     #[arg(short, long)]
     pub config: Option<String>,
+
+    /// Workspace directory (defaults to current directory)
+    #[arg(short, long)]
+    pub workspace: Option<PathBuf>,
 
     /// Task to execute (if provided, runs in single-shot mode instead of interactive)
     pub task: Option<String>,
@@ -77,6 +81,30 @@ pub async fn run() -> Result<()> {
 
     info!("Starting G3 AI Coding Agent");
 
+    // Set up workspace directory
+    let workspace_dir = if let Some(ws) = cli.workspace {
+        ws
+    } else if cli.autonomous {
+        // For autonomous mode, use G3_WORKSPACE env var or default
+        setup_workspace_directory()?
+    } else {
+        // Default to current directory for interactive/single-shot mode
+        std::env::current_dir()?
+    };
+
+    // Create project model
+    let project = if cli.autonomous {
+        Project::new_autonomous(workspace_dir.clone())?
+    } else {
+        Project::new(workspace_dir.clone())
+    };
+
+    // Ensure workspace exists and enter it
+    project.ensure_workspace_exists()?;
+    project.enter_workspace()?;
+
+    info!("Using workspace: {}", project.workspace().display());
+
     // Load configuration
     let config = Config::load(cli.config.as_deref())?;
 
@@ -87,7 +115,7 @@ pub async fn run() -> Result<()> {
     if cli.autonomous {
         // Autonomous mode with coach-player feedback loop
         info!("Starting autonomous mode");
-        run_autonomous(agent, cli.show_prompt, cli.show_code, cli.max_turns).await?;
+        run_autonomous(agent, project, cli.show_prompt, cli.show_code, cli.max_turns).await?;
     } else if let Some(task) = cli.task {
         // Single-shot mode
         info!("Executing task: {}", task);
@@ -98,6 +126,7 @@ pub async fn run() -> Result<()> {
     } else {
         // Interactive mode (default)
         info!("Starting interactive mode");
+        println!("📁 Workspace: {}", project.workspace().display());
         run_interactive(agent, cli.show_prompt, cli.show_code).await?;
     }
 
@@ -519,12 +548,10 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, max_turns: usize) -> Result<()> {
-    // Set up workspace directory
-    let workspace_dir = setup_workspace_directory()?;
-
+async fn run_autonomous(mut agent: Agent, project: Project, show_prompt: bool, show_code: bool, max_turns: usize) -> Result<()> {
     // Set up logging
-    let logger = AutonomousLogger::new(&workspace_dir)?;
+    project.ensure_logs_dir()?;
+    let logger = AutonomousLogger::new(&project.logs_dir())?;
 
     // Initialize session metrics
     let mut session_metrics = SessionMetrics::new();
@@ -533,31 +560,27 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, ma
     logger.log(&format!("🤖 G3 AI Coding Agent - Autonomous Mode"));
     logger.log(&format!(
         "📁 Using workspace directory: {}",
-        workspace_dir.display()
+        project.workspace().display()
     ));
-
-    // Change to workspace directory
-    std::env::set_current_dir(&workspace_dir)?;
-    logger.log("📂 Changed to workspace directory");
+    logger.log(&format!("📂 Project: {}", project.name));
 
     logger.log("🎯 Looking for requirements.md in workspace directory...");
 
-    // Check if requirements.md exists
-    let requirements_path = workspace_dir.join("requirements.md");
-    if !requirements_path.exists() {
+    // Check if requirements exist
+    if !project.has_requirements() {
         logger.log("❌ Error: requirements.md not found in workspace directory");
         logger.log(&format!(
             "   Please create a requirements.md file with your project requirements at:"
         ));
-        logger.log(&format!("   {}", requirements_path.display()));
+        logger.log(&format!("   {}/requirements.md", project.workspace().display()));
         return Ok(());
     }
 
-    // Read requirements.md
-    let requirements = match std::fs::read_to_string(&requirements_path) {
-        Ok(content) => content,
-        Err(e) => {
-            logger.log(&format!("❌ Error reading requirements.md: {}", e));
+    // Read requirements
+    let requirements = match project.read_requirements()? {
+        Some(content) => content,
+        None => {
+            logger.log("❌ Error: Could not read requirements.md");
             return Ok(());
         }
     };
@@ -569,12 +592,11 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, ma
     ));
 
     // Check if there are existing project files (skip first player turn if so)
-    let has_existing_files = check_existing_project_files(&workspace_dir, &logger)?;
+    let has_existing_files = check_existing_project_files(project.workspace(), &logger)?;
 
     logger.log("🔄 Starting coach-player feedback loop...");
     logger.log("");
 
-    const MAX_TURNS: usize = 5;
     let mut turn = 1;
     let mut coach_feedback = String::new();
     let mut skip_player_turn = has_existing_files;
@@ -656,12 +678,11 @@ async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, ma
         }
 
         // Create a new agent instance for coach mode to ensure fresh context
-        // Make sure the coach agent also operates in the workspace directory
         let config = g3_config::Config::load(None)?;
         let mut coach_agent = Agent::new(config).await?;
 
         // Ensure coach agent is also in the workspace directory
-        std::env::set_current_dir(&workspace_dir)?;
+        project.enter_workspace()?;
 
         logger.log_section(&format!("TURN {}/{} - COACH MODE", turn, max_turns));
 
@@ -784,7 +805,7 @@ Keep your response concise and focused on actionable items.",
 /// Check if there are existing project files in the workspace directory
 /// Returns true if project files are found (excluding requirements.md and logs directory)
 fn check_existing_project_files(
-    workspace_dir: &PathBuf,
+    workspace_dir: &std::path::Path,
     logger: &AutonomousLogger,
 ) -> Result<bool> {
     logger.log("🔍 Checking for existing project files...");
@@ -897,13 +918,7 @@ struct AutonomousLogger {
 }
 
 impl AutonomousLogger {
-    fn new(workspace_dir: &PathBuf) -> Result<Self> {
-        // Create logs subdirectory
-        let logs_dir = workspace_dir.join("logs");
-        if !logs_dir.exists() {
-            std::fs::create_dir_all(&logs_dir)?;
-        }
-
+    fn new(logs_dir: &PathBuf) -> Result<Self> {
         // Create log file with timestamp in logs subdirectory
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let log_path = logs_dir.join(format!("g3_autonomous_{}.log", timestamp));
