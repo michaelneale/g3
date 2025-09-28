@@ -170,7 +170,8 @@ impl Config {
         let config = settings.build()?.try_deserialize()?;
         Ok(config)
     }
-    
+
+    #[allow(dead_code)]
     fn default_qwen_config() -> Self {
         Self {
             providers: ProvidersConfig {
