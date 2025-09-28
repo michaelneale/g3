@@ -1027,14 +1027,27 @@ The tool will execute immediately and you'll receive the result (success or erro
                             io::stdout().flush()?;
 
                             // Add the tool call and result to the context window
-                            let tool_message = Message {
-                                role: MessageRole::Assistant,
-                                content: format!(
-                                    "{}\n\n{{\"tool\": \"{}\", \"args\": {}}}",
-                                    final_display_content.trim(),
-                                    tool_call.tool,
-                                    tool_call.args
-                                ),
+                            // Only include the text content if it's not already in full_response
+                            let tool_message = if !full_response.contains(final_display_content) {
+                                Message {
+                                    role: MessageRole::Assistant,
+                                    content: format!(
+                                        "{}\n\n{{\"tool\": \"{}\", \"args\": {}}}",
+                                        final_display_content.trim(),
+                                        tool_call.tool,
+                                        tool_call.args
+                                    ),
+                                }
+                            } else {
+                                // If we've already added the text, just include the tool call
+                                Message {
+                                    role: MessageRole::Assistant,
+                                    content: format!(
+                                        "{{\"tool\": \"{}\", \"args\": {}}}",
+                                        tool_call.tool,
+                                        tool_call.args
+                                    ),
+                                }
                             };
                             let result_message = Message {
                                 role: MessageRole::User,
@@ -1052,7 +1065,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 request.tools = Some(Self::create_tool_definitions());
                             }
 
-                            full_response.push_str(final_display_content);
+                            // Only add to full_response if we haven't already added it
+                            if !full_response.contains(final_display_content) {
+                                full_response.push_str(final_display_content);
+                            }
                             tool_executed = true;
 
                             // Reset parser for next iteration
