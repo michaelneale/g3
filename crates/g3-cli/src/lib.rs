@@ -164,14 +164,12 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                 rl.add_history_entry(input)?;
 
                 // Handle /auto command for in-place autonomous mode
-                if input.starts_with("/auto ") {
-                    let rest = input.trim_start_matches("/auto ").trim();
-                    
-                    if rest.is_empty() {
-                        println!("❌ Please provide an instruction after /auto");
-                        println!("   Example: /auto Create a Python web server");
-                        continue;
-                    }
+                if input.starts_with("/auto") {
+                    let rest = if input.len() > 5 {
+                        input[5..].trim()
+                    } else {
+                        ""
+                    };
                     
                     // Parse optional turn count
                     let (max_turns, instruction) = if let Some(first_word) = rest.split_whitespace().next() {
@@ -187,14 +185,10 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                         (5, rest)
                     };
                     
-                    if instruction.is_empty() {
-                        println!("❌ Please provide an instruction after the turn count");
-                        println!("   Example: /auto 3 Create a Python web server");
-                        continue;
-                    }
-                    
                     println!("\n🤖 Starting autonomous mode in current directory...");
-                    println!("📋 Instruction: {}", instruction);
+                    if !instruction.is_empty() {
+                        println!("📋 Instruction: {}", instruction);
+                    }
                     println!("📂 Working directory: {}", std::env::current_dir()?.display());
                     println!("🔄 Max turns: {}", max_turns);
                     println!();
@@ -216,11 +210,16 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                     println!("\n📚 Available Commands:");
                     println!("  /auto [turns] <instruction> - Run autonomous mode in current directory");
                     println!("                                Default: 5 turns, max recommended: 10");
+                    println!("  /auto                       - Prompt for requirements if no requirements.md");
                     println!("  /help or /?                 - Show this help message");
                     println!("  exit or quit                - Exit the session");
                     println!("\nExamples:");
                     println!("  /auto Create a REST API for todo management");
                     println!("  /auto 3 Fix the bugs in server.py");
+                    println!("  /auto                       - Will prompt for requirements or use requirements.md");
+                    println!("\nNotes:");
+                    println!("  - If requirements.md exists in current directory, you'll be asked if you want to use it");
+                    println!("  - You can optionally save entered requirements to requirements.md for future use");
                     println!();
                     continue;
                 }
@@ -599,6 +598,80 @@ async fn run_autonomous_in_place(
     println!("════════════════════════════════════════════════════════════════════════════════");
     println!();
     
+    // Check if requirements.md exists in current directory
+    let requirements_path = std::env::current_dir()?.join("requirements.md");
+    let final_requirements = if requirements_path.exists() {
+        println!("📋 Found requirements.md in current directory");
+        println!("Would you like to use it? (y/n): ");
+        
+        let mut rl = DefaultEditor::new()?;
+        let use_file = rl.readline("")?;
+        
+        if use_file.trim().to_lowercase() == "y" || use_file.trim().to_lowercase() == "yes" {
+            let file_contents = std::fs::read_to_string(&requirements_path)?;
+            println!("📄 Using requirements from requirements.md");
+            
+            // If user provided additional instruction, append it
+            if !requirements.is_empty() && requirements != "requirements.md" {
+                format!("{}\n\nAdditional instruction: {}", file_contents, requirements)
+            } else {
+                file_contents
+            }
+        } else {
+            println!("📝 Using provided instruction instead");
+            requirements.to_string()
+        }
+    } else if requirements == "requirements.md" || requirements.is_empty() {
+        // User typed just "/auto" or "/auto requirements.md" but file doesn't exist
+        println!("📝 No requirements.md found. Please enter your requirements:");
+        println!("   (Type your requirements, then enter 'END' on a new line when done)");
+        println!();
+        
+        let mut rl = DefaultEditor::new()?;
+        let mut user_requirements = String::new();
+        
+        loop {
+            let line = rl.readline("> ")?;
+            if line.trim() == "END" {
+                break;
+            }
+            user_requirements.push_str(&line);
+            user_requirements.push('\n');
+        }
+        
+        if user_requirements.trim().is_empty() {
+            println!("❌ No requirements provided. Aborting autonomous mode.");
+            return Ok(());
+        }
+        
+        // Optionally save to requirements.md
+        println!("\nWould you like to save these requirements to requirements.md? (y/n): ");
+        let save_response = rl.readline("")?;
+        
+        if save_response.trim().to_lowercase() == "y" || save_response.trim().to_lowercase() == "yes" {
+            std::fs::write(&requirements_path, &user_requirements)?;
+            println!("💾 Saved requirements to requirements.md");
+        }
+        
+        user_requirements
+    } else {
+        requirements.to_string()
+    };
+    
+    if final_requirements.trim().is_empty() {
+        println!("❌ No requirements provided. Aborting autonomous mode.");
+        return Ok(());
+    }
+    
+    // Display the requirements we're working with
+    let requirements_display = if final_requirements.len() > 200 {
+        format!("{}...", &final_requirements[..200])
+    } else {
+        final_requirements.clone()
+    };
+    println!("📋 Requirements: {}", requirements_display);
+    println!();
+    
     let mut turn = 1;
     let mut coach_feedback = String::new();
     let mut implementation_approved = false;
@@ -610,12 +683,12 @@ async fn run_autonomous_in_place(
         let player_prompt = if coach_feedback.is_empty() {
             format!(
                 "You are G3 in implementation mode. Implement the following requirement:\n\n{}\n\nImplement this step by step, creating all necessary files and code.",
-                requirements
+                final_requirements
             )
         } else {
             format!(
                 "You are G3 in implementation mode. Address the coach's feedback and improve your implementation.\n\nORIGINAL REQUIREMENT:\n{}\n\nCOACH FEEDBACK TO ADDRESS:\n{}\n\nMake the necessary improvements to address the coach's feedback.",
-                requirements, coach_feedback
+                final_requirements, coach_feedback
             )
         };
         
@@ -642,7 +715,7 @@ async fn run_autonomous_in_place(
         
         let coach_prompt = format!(
             "You are G3 in coach mode. Review the implementation against this requirement:\n\n{}\n\nCheck the current files and code in this directory. Provide feedback on:\n1. Whether requirements are correctly implemented\n2. What's missing or incorrect\n3. Specific improvements needed\n\nIf the implementation correctly meets all requirements, respond with: 'IMPLEMENTATION_APPROVED'\nOtherwise provide specific actionable feedback. Be constructive but thorough.",
-            requirements
+            final_requirements
         );
         
         println!("🎓 Coach reviewing...");

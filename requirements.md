@@ -1,2 +1,3 @@
-I want you to enhance this app - it can use an embedded provider which will auto download.
+I want you to enhance this app - it can use an embedded provider which will auto download (the qwen model)
 I want it to startup in that mode if there is no config, and the user can interact and it prompts them for specific instructions - ie what provider they want to use (not the embedded one) and then to provide an api key etc, all interactively with that lightweight embedded provider. It can then switch to the heavy provider as needed.
+Ie it starts up in that more conversational mode - and can somehow prompt them for config (ie ask them to say which provider from a choice, and then save the config, always falling back to it)
