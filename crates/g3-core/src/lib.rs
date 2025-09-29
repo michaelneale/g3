@@ -238,10 +238,24 @@ impl ContextWindow {
             return;
         }
 
-        // Simple token estimation: ~4 characters per token
-        let estimated_tokens = (message.content.len() as f32 / 4.0).ceil() as u32;
+        // Better token estimation based on content type
+        let estimated_tokens = Self::estimate_tokens(&message.content);
         self.used_tokens += estimated_tokens;
         self.conversation_history.push(message);
+    }
+
+    /// More accurate token estimation
+    fn estimate_tokens(text: &str) -> u32 {
+        // Better heuristic: 
+        // - Average English text: ~4 characters per token
+        // - Code/JSON: ~3 characters per token (more symbols)
+        // - Add 10% buffer for safety
+        let base_estimate = if text.contains("{") || text.contains("```") || text.contains("fn ") {
+            (text.len() as f32 / 3.0).ceil() as u32  // Code/JSON
+        } else {
+            (text.len() as f32 / 4.0).ceil() as u32  // Regular text
+        };
+        (base_estimate as f32 * 1.1).ceil() as u32  // Add 10% buffer
     }
 
     pub fn update_usage(&mut self, usage: &g3_providers::Usage) {
@@ -261,14 +275,24 @@ impl ContextWindow {
         self.total_tokens.saturating_sub(self.used_tokens)
     }
 
+
     /// Check if we should trigger summarization (at 80% capacity)
     pub fn should_summarize(&self) -> bool {
-        self.percentage_used() >= 80.0
+        // Trigger at 80% OR if we're getting close to absolute limits
+        // This prevents issues with models that have large contexts but still hit limits
+        let percentage_trigger = self.percentage_used() >= 80.0;
+        
+        // Also trigger if we're approaching common token limits
+        // Most models start having issues around 150k tokens
+        let absolute_trigger = self.used_tokens > 150_000;
+        
+        percentage_trigger || absolute_trigger
     }
-
+    
     /// Create a summary request prompt for the current conversation
     pub fn create_summary_prompt(&self) -> String {
         "Please provide a comprehensive summary of our conversation so far. Include:
+
 
 1. **Main Topic/Goal**: What is the primary task or objective being worked on?
 2. **Key Decisions**: What important decisions have been made?
@@ -897,43 +921,77 @@ The tool will execute immediately and you'll receive the result (success or erro
         // Check if we need to summarize before starting
         if self.context_window.should_summarize() {
             info!(
-                "Context window at {}%, triggering auto-summarization",
-                self.context_window.percentage_used() as u32
+                "Context window at {}% ({}/{} tokens), triggering auto-summarization", 
+                self.context_window.percentage_used() as u32,
+                self.context_window.used_tokens,
+                self.context_window.total_tokens
             );
-
+            
             // Notify user about summarization
-            println!(
-                "\n📊 Context window reaching capacity ({}%). Creating summary...",
-                self.context_window.percentage_used() as u32
-            );
-
-            // Create summary request
+            println!("\n📊 Context window reaching capacity ({}%). Creating summary...", 
+                self.context_window.percentage_used() as u32);
+            
+            // Create summary request with FULL history
             let summary_prompt = self.context_window.create_summary_prompt();
+            
+            // Get the full conversation history
+            let conversation_text = self.context_window.conversation_history
+                .iter()
+                .map(|m| format!("{:?}: {}", m.role, m.content))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            
             let summary_messages = vec![
                 Message {
                     role: MessageRole::System,
-                    content: "You are a helpful assistant that creates concise summaries."
-                        .to_string(),
+                    content: "You are a helpful assistant that creates concise summaries.".to_string(),
                 },
                 Message {
                     role: MessageRole::User,
-                    content: format!(
-                        "Based on this conversation history, {}\n\nConversation:\n{}",
+                    content: format!("Based on this conversation history, {}\n\nConversation:\n{}", 
                         summary_prompt,
-                        self.context_window
-                            .conversation_history
-                            .iter()
-                            .map(|m| format!("{:?}: {}", m.role, m.content))
-                            .collect::<Vec<_>>()
-                            .join("\n\n")
+                        conversation_text
                     ),
                 },
             ];
 
             let provider = self.providers.get(None)?;
+            
+            // Dynamically calculate max_tokens for summary based on what's left
+            // We need to ensure: used_tokens + max_tokens <= total_context_limit
+            let summary_max_tokens = match provider.name() {
+                "databricks" | "anthropic" => {
+                    // Claude models have 200k context
+                    // Calculate how much room we have left
+                    let model_limit = 200_000u32;
+                    let current_usage = self.context_window.used_tokens;
+                    // Leave some buffer (5k tokens) for safety
+                    let available = model_limit.saturating_sub(current_usage).saturating_sub(5000);
+                    // Cap at a reasonable summary size (10k tokens max)
+                    Some(available.min(10_000))
+                }
+                "embedded" => {
+                    // For smaller context models, be more conservative
+                    let model_limit = self.context_window.total_tokens;
+                    let current_usage = self.context_window.used_tokens;
+                    // Leave 1k buffer
+                    let available = model_limit.saturating_sub(current_usage).saturating_sub(1000);
+                    // Cap at 3k for embedded models
+                    Some(available.min(3000))
+                }
+                _ => {
+                    // Default: conservative approach
+                    let available = self.context_window.remaining_tokens().saturating_sub(2000);
+                    Some(available.min(5000))
+                }
+            };
+            
+            info!("Requesting summary with max_tokens: {:?} (current usage: {} tokens)", 
+                summary_max_tokens, self.context_window.used_tokens);
+            
             let summary_request = CompletionRequest {
                 messages: summary_messages,
-                max_tokens: Some(4000), // Reasonable size for summary
+                max_tokens: summary_max_tokens,
                 temperature: Some(0.3), // Lower temperature for factual summary
                 stream: false,
                 tools: None,
@@ -962,7 +1020,11 @@ The tool will execute immediately and you'll receive the result (success or erro
                     println!("🔄 Context reset complete. Continuing with your request...\n");
                 }
                 Err(e) => {
-                    warn!("Failed to create summary: {}. Continuing without reset.", e);
+                    error!("Failed to create summary: {}", e);
+                    println!("⚠️ Unable to create summary. Consider starting a new session if you continue to see errors.\n");
+                    // Don't continue with the original request if summarization failed
+                    // as we're likely at token limit
+                    return Err(anyhow::anyhow!("Context window at capacity and summarization failed. Please start a new session."));
                 }
             }
         }
