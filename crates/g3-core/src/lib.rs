@@ -260,6 +260,47 @@ impl ContextWindow {
     pub fn remaining_tokens(&self) -> u32 {
         self.total_tokens.saturating_sub(self.used_tokens)
     }
+
+    /// Check if we should trigger summarization (at 80% capacity)
+    pub fn should_summarize(&self) -> bool {
+        self.percentage_used() >= 80.0
+    }
+
+    /// Create a summary request prompt for the current conversation
+    pub fn create_summary_prompt(&self) -> String {
+        "Please provide a comprehensive summary of our conversation so far. Include:
+
+1. **Main Topic/Goal**: What is the primary task or objective being worked on?
+2. **Key Decisions**: What important decisions have been made?
+3. **Actions Taken**: What specific actions, commands, or code changes have been completed?
+4. **Current State**: What is the current status of the work?
+5. **Important Context**: Any critical information, file paths, configurations, or constraints that should be remembered?
+6. **Pending Items**: What remains to be done or what was the user's last request?
+
+Format this as a detailed but concise summary that can be used to resume the conversation from scratch while maintaining full context.".to_string()
+    }
+
+    /// Reset the context window with a summary
+    pub fn reset_with_summary(&mut self, summary: String, latest_user_message: Option<String>) {
+        // Clear the conversation history
+        self.conversation_history.clear();
+        self.used_tokens = 0;
+
+        // Add the summary as a system message
+        let summary_message = Message {
+            role: MessageRole::System,
+            content: format!("Previous conversation summary:\n\n{}", summary),
+        };
+        self.add_message(summary_message);
+
+        // Add the latest user message if provided
+        if let Some(user_msg) = latest_user_message {
+            self.add_message(Message {
+                role: MessageRole::User,
+                content: user_msg,
+            });
+        }
+    }
 }
 
 pub struct Agent {
@@ -510,16 +551,17 @@ impl Agent {
             let provider = self.providers.get(None)?;
             let system_prompt = if provider.has_native_tool_calling() {
                 // For native tool calling providers, use a more explicit system prompt
-                "You are G3, a general-purpose AI agent. Your goal is to analyze and solve problems by writing code. The current directory always contains a project that the user is working on and likely referring to.
+                "You are G3, an AI programming agent. Your goal is to analyze, write and modify code to achieve given goals.
 
-You have access to tools. When you need to accomplish a task, you MUST use the appropriate tool immediately. Do not just describe what you would do - actually use the tools.
+You have access to tools. When you need to accomplish a task, you MUST use the appropriate tool. Do not just describe what you would do - actually use the tools.
 
-IMPORTANT: You must call tools to complete tasks. When you receive a request:
-1. Identify what needs to be done
-2. Immediately call the appropriate tool with the required parameters
+IMPORTANT: You must call tools to achieve goals. When you receive a request:
+1. Analyze and identify what needs to be done
+2. Call the appropriate tool with the required parameters
 3. Wait for the tool result
 4. Continue or complete the task based on the result
-5. Call the final_output task with a detailed summary when done with all tasks.
+5. If you repeatedly try something and it fails, try a different approach
+6. Call the final_output task with a detailed summary when done with all tasks.
 
 For shell commands: Use the shell tool with the exact command needed. Avoid commands that produce a large amount of output, and consider piping those outputs to files. Example: If asked to list files, immediately call the shell tool with command parameter \"ls\".
 
@@ -852,6 +894,79 @@ The tool will execute immediately and you'll receive the result (success or erro
         const MAX_ITERATIONS: usize = 30; // Prevent infinite loops
         let mut response_started = false;
 
+        // Check if we need to summarize before starting
+        if self.context_window.should_summarize() {
+            info!(
+                "Context window at {}%, triggering auto-summarization",
+                self.context_window.percentage_used() as u32
+            );
+
+            // Notify user about summarization
+            println!(
+                "\n📊 Context window reaching capacity ({}%). Creating summary...",
+                self.context_window.percentage_used() as u32
+            );
+
+            // Create summary request
+            let summary_prompt = self.context_window.create_summary_prompt();
+            let summary_messages = vec![
+                Message {
+                    role: MessageRole::System,
+                    content: "You are a helpful assistant that creates concise summaries."
+                        .to_string(),
+                },
+                Message {
+                    role: MessageRole::User,
+                    content: format!(
+                        "Based on this conversation history, {}\n\nConversation:\n{}",
+                        summary_prompt,
+                        self.context_window
+                            .conversation_history
+                            .iter()
+                            .map(|m| format!("{:?}: {}", m.role, m.content))
+                            .collect::<Vec<_>>()
+                            .join("\n\n")
+                    ),
+                },
+            ];
+
+            let provider = self.providers.get(None)?;
+            let summary_request = CompletionRequest {
+                messages: summary_messages,
+                max_tokens: Some(4000), // Reasonable size for summary
+                temperature: Some(0.3), // Lower temperature for factual summary
+                stream: false,
+                tools: None,
+            };
+
+            // Get the summary
+            match provider.complete(summary_request).await {
+                Ok(summary_response) => {
+                    println!("✅ Summary created successfully. Resetting context window...\n");
+
+                    // Extract the latest user message from the request
+                    let latest_user_msg = request
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|m| matches!(m.role, MessageRole::User))
+                        .map(|m| m.content.clone());
+
+                    // Reset context with summary
+                    self.context_window
+                        .reset_with_summary(summary_response.content, latest_user_msg);
+
+                    // Update the request with new context
+                    request.messages = self.context_window.conversation_history.clone();
+
+                    println!("🔄 Context reset complete. Continuing with your request...\n");
+                }
+                Err(e) => {
+                    warn!("Failed to create summary: {}. Continuing without reset.", e);
+                }
+            }
+        }
+
         loop {
             iteration_count += 1;
             debug!("Starting iteration {}", iteration_count);
@@ -1045,8 +1160,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                                     role: MessageRole::Assistant,
                                     content: format!(
                                         "{{\"tool\": \"{}\", \"args\": {}}}",
-                                        tool_call.tool,
-                                        tool_call.args
+                                        tool_call.tool, tool_call.args
                                     ),
                                 }
                             };
@@ -1108,7 +1222,8 @@ The tool will execute immediately and you'll receive the result (success or erro
                                 // No tools were executed in this iteration, we're done
                                 full_response.push_str(&current_response);
                                 println!();
-                                let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
+                                let ttft =
+                                    first_token_time.unwrap_or_else(|| stream_start.elapsed());
                                 return Ok((full_response, ttft));
                             }
                             break; // Tool was executed, break to continue outer loop

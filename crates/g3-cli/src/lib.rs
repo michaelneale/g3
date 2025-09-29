@@ -1,9 +1,9 @@
 use anyhow::Result;
 use clap::Parser;
 use g3_config::Config;
-use g3_core::{Agent, project::Project};
+use g3_core::{project::Project, Agent};
 use rustyline::error::ReadlineError;
-use rustyline::DefaultEditor;
+use rustyline::{Cmd, ConditionalEventHandler, DefaultEditor, Event, EventHandler, KeyEvent};
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -115,7 +115,14 @@ pub async fn run() -> Result<()> {
     if cli.autonomous {
         // Autonomous mode with coach-player feedback loop
         info!("Starting autonomous mode");
-        run_autonomous(agent, project, cli.show_prompt, cli.show_code, cli.max_turns).await?;
+        run_autonomous(
+            agent,
+            project,
+            cli.show_prompt,
+            cli.show_code,
+            cli.max_turns,
+        )
+        .await?;
     } else if let Some(task) = cli.task {
         // Single-shot mode
         info!("Executing task: {}", task);
@@ -152,6 +159,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 
     println!();
     println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
+    println!("Press Enter to submit, Shift+Enter to add a new line");
     println!();
 
     // Initialize rustyline editor with history
@@ -167,14 +175,66 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
         let _ = rl.load_history(history_path);
     }
 
+    // Track whether we're in multi-line mode
+    let mut multi_line_buffer = String::new();
+    let mut in_multi_line = false;
+
     loop {
         // Display context window progress bar before each prompt
         display_context_progress(&agent);
 
-        let readline = rl.readline("g3> ");
+        // Adjust prompt based on whether we're in multi-line mode
+        let prompt = if in_multi_line { "... > " } else { "g3> " };
+
+        let readline = rl.readline(prompt);
         match readline {
             Ok(line) => {
-                let input = line.trim();
+                // Check if the line ends with a backslash (alternative multi-line indicator)
+                // or if we're continuing a multi-line input
+                let trimmed_line = line.trim_end();
+
+                // Handle multi-line continuation with backslash
+                if trimmed_line.ends_with('\\') && !in_multi_line {
+                    // Start multi-line mode
+                    in_multi_line = true;
+                    // Remove the backslash and add to buffer
+                    let line_without_backslash = &trimmed_line[..trimmed_line.len() - 1];
+                    multi_line_buffer.push_str(line_without_backslash);
+                    multi_line_buffer.push('\n');
+                    continue;
+                } else if in_multi_line {
+                    // Continue multi-line input
+                    if trimmed_line.is_empty() {
+                        // Empty line ends multi-line mode - process the accumulated input
+                        in_multi_line = false;
+                        // Fall through to process the accumulated input
+                    } else if trimmed_line.ends_with('\\') {
+                        // Continue multi-line with backslash
+                        let line_without_backslash = &trimmed_line[..trimmed_line.len() - 1];
+                        multi_line_buffer.push_str(line_without_backslash);
+                        multi_line_buffer.push('\n');
+                        continue;
+                    } else {
+                        // Last line of multi-line input (no backslash) - add it and process
+                        multi_line_buffer.push_str(&line);
+                        in_multi_line = false;
+                        // Fall through to process the accumulated input
+                    }
+                }
+
+                // Get the final input
+                let input = if !multi_line_buffer.is_empty() {
+                    // We have multi-line input to process
+                    let result = multi_line_buffer.trim().to_string();
+                    multi_line_buffer.clear();
+                    result
+                } else if !in_multi_line {
+                    // Single line input
+                    line.trim().to_string()
+                } else {
+                    // Should not reach here, but handle gracefully
+                    continue;
+                };
 
                 if input == "exit" || input == "quit" {
                     break;
@@ -185,7 +245,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                 }
 
                 // Add to history
-                rl.add_history_entry(input)?;
+                rl.add_history_entry(&input)?;
 
                 // Show thinking indicator immediately
                 print!("🤔 Thinking...");
@@ -206,7 +266,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                 // Execute task with cancellation support
                 let execution_result = tokio::select! {
                     result = agent.execute_task_with_timing_cancellable(
-                        input, None, false, show_prompt, show_code, true, cancellation_token
+                        &input, None, false, show_prompt, show_code, true, cancellation_token
                     ) => {
                         esc_monitor.abort();
                         result
@@ -231,7 +291,15 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
+                // Ctrl-C pressed
+                if in_multi_line {
+                    // Cancel multi-line input
+                    println!("Multi-line input cancelled");
+                    multi_line_buffer.clear();
+                    in_multi_line = false;
+                } else {
+                    println!("CTRL-C");
+                }
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -548,7 +616,13 @@ fn format_duration(duration: Duration) -> String {
     }
 }
 
-async fn run_autonomous(mut agent: Agent, project: Project, show_prompt: bool, show_code: bool, max_turns: usize) -> Result<()> {
+async fn run_autonomous(
+    mut agent: Agent,
+    project: Project,
+    show_prompt: bool,
+    show_code: bool,
+    max_turns: usize,
+) -> Result<()> {
     // Set up logging
     project.ensure_logs_dir()?;
     let logger = AutonomousLogger::new(&project.logs_dir())?;
@@ -572,7 +646,10 @@ async fn run_autonomous(mut agent: Agent, project: Project, show_prompt: bool, s
         logger.log(&format!(
             "   Please create a requirements.md file with your project requirements at:"
         ));
-        logger.log(&format!("   {}/requirements.md", project.workspace().display()));
+        logger.log(&format!(
+            "   {}/requirements.md",
+            project.workspace().display()
+        ));
         return Ok(());
     }
 
@@ -696,12 +773,13 @@ REQUIREMENTS:
 IMPLEMENTATION REVIEW:
 Review the current state of the project and provide a concise critique focusing on:
 1. Whether the requirements are correctly implemented
-2. What's missing or incorrect
-3. Specific improvements needed
+2. Whether the project compiles successfully
+3. What requirements are missing or incorrect
+4. Specific improvements needed to satisfy requirements
 
 If the implementation correctly meets all requirements, respond with: 'IMPLEMENTATION_APPROVED'
-If improvements are needed, provide specific actionable feedback. Don't be overly critical. APPROVE the
-implementation if it generally fits the bill, doesn't have compile errors or glaring omissions.
+If improvements are needed, provide specific actionable feedback. Be thorough but don't be overly critical. APPROVE the
+implementation if it doesn't have compile errors, glaring omissions and generally fits the bill.
 
 Keep your response concise and focused on actionable items.",
             requirements
@@ -946,7 +1024,10 @@ impl AutonomousLogger {
             first_line.to_string()
         } else {
             // Use char indices to ensure we don't split UTF-8 characters
-            let truncated: String = first_line.chars().take(max_chars.saturating_sub(3)).collect();
+            let truncated: String = first_line
+                .chars()
+                .take(max_chars.saturating_sub(3))
+                .collect();
             format!("{}...", truncated)
         }
     }
