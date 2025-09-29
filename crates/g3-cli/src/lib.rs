@@ -122,7 +122,12 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
     }
 
     println!();
-    println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
+    println!("Commands:");
+    println!("  /auto [turns] <instruction> - Run autonomous mode in current directory");
+    println!("  /help                       - Show available commands");
+    println!("  exit or quit                - Exit the session");
+    println!();
+    println!("Use Up/Down arrows for command history");
     println!();
 
     // Initialize rustyline editor with history
@@ -157,6 +162,68 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 
                 // Add to history
                 rl.add_history_entry(input)?;
+
+                // Handle /auto command for in-place autonomous mode
+                if input.starts_with("/auto ") {
+                    let rest = input.trim_start_matches("/auto ").trim();
+                    
+                    if rest.is_empty() {
+                        println!("❌ Please provide an instruction after /auto");
+                        println!("   Example: /auto Create a Python web server");
+                        continue;
+                    }
+                    
+                    // Parse optional turn count
+                    let (max_turns, instruction) = if let Some(first_word) = rest.split_whitespace().next() {
+                        if let Ok(turns) = first_word.parse::<usize>() {
+                            // First word is a number, use it as max_turns
+                            let instruction = rest.trim_start_matches(first_word).trim();
+                            (turns, instruction)
+                        } else {
+                            // First word is not a number, use default max_turns
+                            (5, rest)
+                        }
+                    } else {
+                        (5, rest)
+                    };
+                    
+                    if instruction.is_empty() {
+                        println!("❌ Please provide an instruction after the turn count");
+                        println!("   Example: /auto 3 Create a Python web server");
+                        continue;
+                    }
+                    
+                    println!("\n🤖 Starting autonomous mode in current directory...");
+                    println!("📋 Instruction: {}", instruction);
+                    println!("📂 Working directory: {}", std::env::current_dir()?.display());
+                    println!("🔄 Max turns: {}", max_turns);
+                    println!();
+                    
+                    // Run autonomous mode in-place
+                    match run_autonomous_in_place(&mut agent, instruction, max_turns, show_prompt, show_code).await {
+                        Ok(_) => {
+                            println!("\n✅ Autonomous mode completed, back to interactive mode");
+                        }
+                        Err(e) => {
+                            println!("\n❌ Autonomous mode error: {}", e);
+                        }
+                    }
+                    continue;
+                }
+                
+                // Handle /help command
+                if input == "/help" || input == "/?" {
+                    println!("\n📚 Available Commands:");
+                    println!("  /auto [turns] <instruction> - Run autonomous mode in current directory");
+                    println!("                                Default: 5 turns, max recommended: 10");
+                    println!("  /help or /?                 - Show this help message");
+                    println!("  exit or quit                - Exit the session");
+                    println!("\nExamples:");
+                    println!("  /auto Create a REST API for todo management");
+                    println!("  /auto 3 Fix the bugs in server.py");
+                    println!();
+                    continue;
+                }
 
                 // Show thinking indicator immediately
                 print!("🤔 Thinking...");
@@ -517,6 +584,111 @@ fn format_duration(duration: Duration) -> String {
         let mins = (total_secs % 3600) / 60;
         format!("{}h{}m", hours, mins)
     }
+}
+
+/// Run autonomous mode in-place without changing directories
+async fn run_autonomous_in_place(
+    agent: &mut Agent,
+    requirements: &str,
+    max_turns: usize,
+    show_prompt: bool,
+    show_code: bool,
+) -> Result<()> {
+    println!("════════════════════════════════════════════════════════════════════════════════");
+    println!("                        AUTONOMOUS MODE - COACH/PLAYER LOOP                     ");
+    println!("════════════════════════════════════════════════════════════════════════════════");
+    println!();
+    
+    let mut turn = 1;
+    let mut coach_feedback = String::new();
+    let mut implementation_approved = false;
+    
+    loop {
+        // PLAYER TURN
+        println!("━━━ Turn {}/{} - PLAYER MODE ━━━", turn, max_turns);
+        
+        let player_prompt = if coach_feedback.is_empty() {
+            format!(
+                "You are G3 in implementation mode. Implement the following requirement:\n\n{}\n\nImplement this step by step, creating all necessary files and code.",
+                requirements
+            )
+        } else {
+            format!(
+                "You are G3 in implementation mode. Address the coach's feedback and improve your implementation.\n\nORIGINAL REQUIREMENT:\n{}\n\nCOACH FEEDBACK TO ADDRESS:\n{}\n\nMake the necessary improvements to address the coach's feedback.",
+                requirements, coach_feedback
+            )
+        };
+        
+        println!("🎯 Player implementing...");
+        
+        // Execute player task
+        let player_result = agent
+            .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
+            .await;
+            
+        if let Err(e) = player_result {
+            println!("❌ Player implementation error: {}", e);
+            return Err(e);
+        }
+        
+        println!();
+        
+        // COACH TURN
+        println!("━━━ Turn {}/{} - COACH MODE ━━━", turn, max_turns);
+        
+        // Create a fresh agent for the coach to have clean context
+        let config = g3_config::Config::load(None)?;
+        let mut coach_agent = Agent::new(config).await?;
+        
+        let coach_prompt = format!(
+            "You are G3 in coach mode. Review the implementation against this requirement:\n\n{}\n\nCheck the current files and code in this directory. Provide feedback on:\n1. Whether requirements are correctly implemented\n2. What's missing or incorrect\n3. Specific improvements needed\n\nIf the implementation correctly meets all requirements, respond with: 'IMPLEMENTATION_APPROVED'\nOtherwise provide specific actionable feedback. Be constructive but thorough.",
+            requirements
+        );
+        
+        println!("🎓 Coach reviewing...");
+        
+        let coach_result = coach_agent
+            .execute_task_with_timing(&coach_prompt, None, false, show_prompt, show_code, true)
+            .await?;
+            
+        // Display coach feedback (truncated for readability)
+        let coach_display = if coach_result.len() > 500 {
+            format!("{}...", &coach_result[..500])
+        } else {
+            coach_result.clone()
+        };
+        println!("📝 Coach feedback: {}", coach_display);
+        println!();
+        
+        // Check if approved
+        if coach_result.contains("IMPLEMENTATION_APPROVED") {
+            println!("════════════════════════════════════════════════════════════════════════════════");
+            println!("✅ IMPLEMENTATION APPROVED BY COACH!");
+            println!("════════════════════════════════════════════════════════════════════════════════");
+            implementation_approved = true;
+            break;
+        }
+        
+        // Check max turns
+        if turn >= max_turns {
+            println!("════════════════════════════════════════════════════════════════════════════════");
+            println!("⏰ Maximum turns ({}) reached", max_turns);
+            println!("════════════════════════════════════════════════════════════════════════════════");
+            break;
+        }
+        
+        coach_feedback = coach_result;
+        turn += 1;
+        
+        println!("🔄 Continuing to turn {}...", turn);
+        println!();
+    }
+    
+    if !implementation_approved && turn >= max_turns {
+        println!("💡 Tip: You can run '/auto' again to continue iterating");
+    }
+    
+    Ok(())
 }
 
 async fn run_autonomous(mut agent: Agent, show_prompt: bool, show_code: bool, max_turns: usize) -> Result<()> {
