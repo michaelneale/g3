@@ -970,7 +970,7 @@ The tool will execute immediately and you'll receive the result (success or erro
         let stream_start = Instant::now();
         let mut total_execution_time = Duration::new(0, 0);
         let mut iteration_count = 0;
-        const MAX_ITERATIONS: usize = 30; // Prevent infinite loops
+        const MAX_ITERATIONS: usize = 400; // Prevent infinite loops
         let mut response_started = false;
 
         // Check if we need to summarize before starting
@@ -1775,10 +1775,19 @@ The tool will execute immediately and you'll receive the result (success or erro
                 };
 
                 // Optional start and end character positions (0-indexed, end is EXCLUSIVE)
-                let start_char = args_obj.get("start").and_then(|v| v.as_u64()).map(|n| n as usize);
-                let end_char = args_obj.get("end").and_then(|v| v.as_u64()).map(|n| n as usize);
+                let start_char = args_obj
+                    .get("start")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
+                let end_char = args_obj
+                    .get("end")
+                    .and_then(|v| v.as_u64())
+                    .map(|n| n as usize);
 
-                debug!("str_replace: path={}, start={:?}, end={:?}", file_path, start_char, end_char);
+                debug!(
+                    "str_replace: path={}, start={:?}, end={:?}",
+                    file_path, start_char, end_char
+                );
 
                 // Read the existing file
                 let file_content = match std::fs::read_to_string(file_path) {
@@ -1792,7 +1801,11 @@ The tool will execute immediately and you'll receive the result (success or erro
                     None => return Ok("❌ Invalid diff format. Expected unified diff with --- (old) and +++ (new) sections".to_string()),
                 };
 
-                debug!("Parsed diff: old_len={}, new_len={}", old_content.len(), new_content.len());
+                debug!(
+                    "Parsed diff: old_len={}, new_len={}",
+                    old_content.len(),
+                    new_content.len()
+                );
 
                 // Determine the search range
                 let search_start = start_char.unwrap_or(0);
@@ -1800,13 +1813,24 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                 // Validate the range
                 if search_start > file_content.len() {
-                    return Ok(format!("❌ start position {} exceeds file length {}", search_start, file_content.len()));
+                    return Ok(format!(
+                        "❌ start position {} exceeds file length {}",
+                        search_start,
+                        file_content.len()
+                    ));
                 }
                 if search_end > file_content.len() {
-                    return Ok(format!("❌ end position {} exceeds file length {}", search_end, file_content.len()));
+                    return Ok(format!(
+                        "❌ end position {} exceeds file length {}",
+                        search_end,
+                        file_content.len()
+                    ));
                 }
                 if search_start > search_end {
-                    return Ok(format!("❌ start position {} is greater than end position {}", search_start, search_end));
+                    return Ok(format!(
+                        "❌ start position {} is greater than end position {}",
+                        search_start, search_end
+                    ));
                 }
 
                 // Extract the search region
@@ -1823,7 +1847,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                         } else {
                             old_content.clone()
                         };
-                        
+
                         return Ok(format!(
                             "❌ Pattern not found in file{}\nSearched for: {}",
                             if start_char.is_some() || end_char.is_some() {
@@ -1840,7 +1864,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                 let absolute_position = search_start + position_in_region;
                 let replace_end = absolute_position + old_content.len();
 
-                debug!("Found pattern at position {} (absolute), replacing until {}", absolute_position, replace_end);
+                debug!(
+                    "Found pattern at position {} (absolute), replacing until {}",
+                    absolute_position, replace_end
+                );
 
                 // Perform the replacement
                 let mut result = String::with_capacity(file_content.len());
@@ -1856,7 +1883,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                         let new_lines = new_content.lines().count();
                         let chars_replaced = old_content.len();
                         let chars_added = new_content.len();
-                        
+
                         Ok(format!(
                             "✅ Successfully replaced text in '{}'\n   Replaced {} characters ({} lines) at position {} with {} characters ({} lines)",
                             file_path, chars_replaced, old_lines, absolute_position, chars_added, new_lines
@@ -1959,7 +1986,7 @@ fn parse_unified_diff(diff: &str) -> Option<(String, String)> {
     let mut new_lines = Vec::new();
     let mut found_old = false;
     let mut found_new = false;
-    
+
     for line in diff.lines() {
         if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") {
             // Skip diff headers
@@ -1982,20 +2009,28 @@ fn parse_unified_diff(diff: &str) -> Option<(String, String)> {
             }
         }
     }
-    
+
     // If we didn't find explicit diff markers, try a simpler format:
     // Just look for "old content" followed by "new content" separated by some delimiter
     if !found_old && !found_new {
         // Alternative: split on common separators
-        if let Some(separator_pos) = diff.find("\n===\n").or_else(|| diff.find("\n---\n")).or_else(|| diff.find("\n\n")) {
+        if let Some(separator_pos) = diff
+            .find("\n===\n")
+            .or_else(|| diff.find("\n---\n"))
+            .or_else(|| diff.find("\n\n"))
+        {
             let old_content = diff[..separator_pos].trim();
-            let new_content = diff[separator_pos..].trim().trim_start_matches("===").trim_start_matches("---").trim();
+            let new_content = diff[separator_pos..]
+                .trim()
+                .trim_start_matches("===")
+                .trim_start_matches("---")
+                .trim();
             return Some((old_content.to_string(), new_content.to_string()));
         }
         // If no separator found, treat entire diff as old content to be replaced with empty
         return Some((diff.trim().to_string(), String::new()));
     }
-    
+
     let old_content = old_lines.join("\n");
     let new_content = new_lines.join("\n");
     Some((old_content, new_content))
