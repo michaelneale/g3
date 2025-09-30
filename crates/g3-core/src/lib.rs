@@ -625,8 +625,8 @@ The tool will execute immediately and you'll receive the result (success or erro
   - Example: {\"tool\": \"write_file\", \"args\": {\"file_path\": \"src/lib.rs\", \"content\": \"pub fn hello() {}\"}}
 
 - **edit_file**: Edit a specific range of lines in a file
-  - Format: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"path/to/file\", \"start_line\": 1, \"end_line\": 3, \"new_text\": \"replacement text\"}}
-  - Example: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"src/main.rs\", \"start_line\": 5, \"end_line\": 7, \"new_text\": \"println!(\\\"Hello, world!\\\");\"}}
+  - Format: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"path/to/file\", \"content\": \"replacement text\", \"start_of_range\": 1, \"end_of_range\": 3}}
+  - Example: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"src/main.rs\", \"content\": \"println!(\\\"Hello, world!\\\");\", \"start_of_range\": 5, \"end_of_range\": 7}}
 
 - **final_output**: Signal task completion with a detailed summary of work done in markdown format
   - Format: {\"tool\": \"final_output\", \"args\": {\"summary\": \"what_was_accomplished\"}}
@@ -882,6 +882,32 @@ The tool will execute immediately and you'll receive the result (success or erro
                         }
                     },
                     "required": ["file_path", "content"]
+                }),
+            },
+            Tool {
+                name: "edit_file".to_string(),
+                description: "Edit a specific range of lines in a file. Replaces lines from start_of_range to end_of_range (inclusive, 1-indexed) with new content.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "The path to the file to edit"
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "The new content to replace the specified range"
+                        },
+                        "start_of_range": {
+                            "type": "integer",
+                            "description": "The starting line number (1-indexed, inclusive)"
+                        },
+                        "end_of_range": {
+                            "type": "integer",
+                            "description": "The ending line number (1-indexed, inclusive)"
+                        }
+                    },
+                    "required": ["file_path", "content", "start_of_range", "end_of_range"]
                 }),
             },
             Tool {
@@ -1573,6 +1599,100 @@ The tool will execute immediately and you'll receive the result (success or erro
                         "❌ Missing file_path or content argument. Available keys: {:?}. Expected formats: {{\"file_path\": \"...\", \"content\": \"...\"}}, {{\"path\": \"...\", \"content\": \"...\"}}, {{\"filename\": \"...\", \"text\": \"...\"}}, or {{\"file\": \"...\", \"data\": \"...\"}}",
                         available_keys
                     ))
+                }
+            }
+            "edit_file" => {
+                debug!("Processing edit_file tool call");
+                
+                // Extract arguments
+                let args_obj = tool_call.args.as_object();
+                if args_obj.is_none() {
+                    return Ok("❌ Invalid arguments: expected object".to_string());
+                }
+                let args_obj = args_obj.unwrap();
+                
+                // Get file_path
+                let file_path = args_obj.get("file_path")
+                    .and_then(|v| v.as_str());
+                if file_path.is_none() {
+                    return Ok("❌ Missing file_path argument".to_string());
+                }
+                let file_path = file_path.unwrap();
+                
+                // Get content
+                let content = args_obj.get("content")
+                    .and_then(|v| v.as_str());
+                if content.is_none() {
+                    return Ok("❌ Missing content argument".to_string());
+                }
+                let content = content.unwrap();
+                
+                // Get start_of_range
+                let start_of_range = args_obj.get("start_of_range")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as usize);
+                if start_of_range.is_none() {
+                    return Ok("❌ Missing or invalid start_of_range argument".to_string());
+                }
+                let start_of_range = start_of_range.unwrap();
+                
+                // Get end_of_range
+                let end_of_range = args_obj.get("end_of_range")
+                    .and_then(|v| v.as_i64())
+                    .map(|v| v as usize);
+                if end_of_range.is_none() {
+                    return Ok("❌ Missing or invalid end_of_range argument".to_string());
+                }
+                let end_of_range = end_of_range.unwrap();
+                
+                // Validate range
+                if start_of_range < 1 {
+                    return Ok("❌ start_of_range must be >= 1 (lines are 1-indexed)".to_string());
+                }
+                if end_of_range < start_of_range {
+                    return Ok("❌ end_of_range must be >= start_of_range".to_string());
+                }
+                
+                // Read the existing file
+                let existing_content = match std::fs::read_to_string(file_path) {
+                    Ok(content) => content,
+                    Err(e) => return Ok(format!("❌ Failed to read file '{}': {}", file_path, e)),
+                };
+                
+                // Split into lines
+                let mut lines: Vec<String> = existing_content.lines().map(|s| s.to_string()).collect();
+                
+                // Check if range is valid
+                if start_of_range > lines.len() + 1 {
+                    return Ok(format!("❌ start_of_range {} exceeds file length ({} lines)", start_of_range, lines.len()));
+                }
+                
+                // Prepare new content lines
+                let new_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                
+                // Calculate the actual end of range (capped at file length)
+                let actual_end = end_of_range.min(lines.len());
+                
+                // Replace the range with new content
+                // Convert to 0-indexed for vector operations
+                let start_idx = start_of_range - 1;
+                let end_idx = actual_end;
+                
+                // Remove old lines and insert new ones
+                lines.splice(start_idx..end_idx, new_lines.clone());
+                
+                // Write back to file
+                let new_content = lines.join("\n");
+                match std::fs::write(file_path, &new_content) {
+                    Ok(()) => {
+                        let lines_replaced = end_idx - start_idx;
+                        let lines_added = new_lines.len();
+                        Ok(format!(
+                            "✅ Successfully edited '{}': replaced {} lines ({}-{}) with {} lines. File now has {} lines",
+                            file_path, lines_replaced, start_of_range, actual_end, lines_added, lines.len()
+                        ))
+                    }
+                    Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", file_path, e)),
                 }
             }
             "final_output" => {

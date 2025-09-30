@@ -137,6 +137,44 @@ pub async fn run() -> Result<()> {
 }
 
 async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
+    // Display the flying goose ASCII art logo
+    println!(r#"
+                                                              ___
+                                                          .-'   `'.
+                                                         /         \
+                                                        |           |
+                                                        |           ;
+                                                        |          /
+                                               _.._     '.       .'
+                                            .-'    `'-.__`\   /`
+                                           /             |  `"`
+                                          |              |
+                                          |              |
+                       ___..--..         |              |
+                 _.--""`         `"-.     |              |
+              .-'                    `.   |              |
+            .'                         `. |              |
+           /                  ___...    \|              |
+          /              _.-""      `\   |              |
+         |           _.-'             |  |              |
+         |        .-'                 |  |              |
+         |     .-'                    |  '.            .'
+         |  .-'                      /    |`'--...--'`|
+         |-'                        /     |            |
+        /                          /      |     G3     |
+       /                 ___      /       |            |
+      |           __..--'   `'-. |        |  CODING    |
+      |     __.--'              `|        |   AGENT    |
+      | .--'                     |        |            |
+      |'                         '.       |            |
+      |                           |       `'--...--'--'
+      |                           |
+      |                           |
+      '.                         /
+        `'--..__            __.-'
+               ``''------''``
+    "#);
+    println!();
     println!("🤖 G3 AI Coding Agent - Interactive Mode");
     println!(
         "I solve problems by writing and executing code. Tell me what you need to accomplish!"
