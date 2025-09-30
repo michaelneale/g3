@@ -1,3 +1,116 @@
-# G3
+# G3 - AI Coding Agent
 
-An experiment in a code-first AI agent that helps you complete tasks by writing and executing code.
+G3 is a general-purpose AI agent designed to help you complete tasks by writing code and executing commands. Built in Rust, it provides a flexible architecture for interacting with various Large Language Model (LLM) providers while offering powerful code generation and task automation capabilities.
+
+## Architecture Overview
+
+G3 follows a modular architecture organized as a Rust workspace with multiple crates, each responsible for specific functionality:
+
+### Core Components
+
+#### **g3-core**
+The heart of the agent system, containing:
+- **Agent Engine**: Main orchestration logic for handling conversations, tool execution, and task management
+- **Context Window Management**: Intelligent tracking of token usage with auto-summarization capabilities when approaching context limits (~80% capacity)
+- **Tool System**: Built-in tools for file operations (read, write, edit), shell command execution, and structured output generation
+- **Streaming Response Parser**: Real-time parsing of LLM responses with tool call detection and execution
+- **Task Execution**: Support for single and iterative task execution with automatic retry logic
+
+#### **g3-providers**
+Abstraction layer for LLM providers:
+- **Provider Interface**: Common trait-based API for different LLM backends
+- **Multiple Provider Support**: 
+  - Anthropic (Claude models)
+  - Databricks (DBRX and other models)
+  - Local/embedded models via llama.cpp with Metal acceleration on macOS
+- **OAuth Authentication**: Built-in OAuth flow support for secure provider authentication
+- **Provider Registry**: Dynamic provider management and selection
+
+#### **g3-config**
+Configuration management system:
+- Environment-based configuration
+- Provider credentials and settings
+- Model selection and parameters
+- Runtime configuration options
+
+#### **g3-execution**
+Task execution framework:
+- Task planning and decomposition
+- Execution strategies (sequential, parallel)
+- Error handling and retry mechanisms
+- Progress tracking and reporting
+
+#### **g3-cli**
+Command-line interface:
+- Interactive terminal interface
+- Task submission and monitoring
+- Configuration management commands
+- Session management
+
+## Key Features
+
+### Intelligent Context Management
+- Automatic context window monitoring with percentage-based tracking
+- Smart auto-summarization when approaching token limits
+- Conversation history preservation through summaries
+- Dynamic token allocation for different providers
+
+### Tool Ecosystem
+- **File Operations**: Read, write, and edit files with line-range precision
+- **Shell Integration**: Execute system commands with output capture
+- **Code Generation**: Structured code generation with syntax awareness
+- **Final Output**: Formatted result presentation
+
+### Provider Flexibility
+- Support for multiple LLM providers through a unified interface
+- Hot-swappable providers without code changes
+- Provider-specific optimizations and feature support
+- Local model support for offline operation
+
+### Task Automation
+- Single-shot task execution for quick operations
+- Iterative task mode for complex, multi-step workflows
+- Automatic error recovery and retry logic
+- Progress tracking and intermediate result handling
+
+## Language & Technology Stack
+
+- **Language**: Rust (2021 edition)
+- **Async Runtime**: Tokio for concurrent operations
+- **HTTP Client**: Reqwest for API communications
+- **Serialization**: Serde for JSON handling
+- **CLI Framework**: Clap for command-line parsing
+- **Logging**: Tracing for structured logging
+- **Local Models**: llama.cpp with Metal acceleration support
+
+## Use Cases
+
+G3 is designed for:
+- Automated code generation and refactoring
+- File manipulation and project scaffolding
+- System administration tasks
+- Data processing and transformation
+- API integration and testing
+- Documentation generation
+- Complex multi-step workflows
+
+## Getting Started
+
+```bash
+# Build the project
+cargo build --release
+
+# Run G3
+cargo run
+
+# Execute a task
+g3 "implement a function to calculate fibonacci numbers"
+```
+
+## License
+
+MIT License - see LICENSE file for details
+
+## Contributing
+
+G3 is an open-source project. Contributions are welcome! Please see CONTRIBUTING.md for guidelines.
