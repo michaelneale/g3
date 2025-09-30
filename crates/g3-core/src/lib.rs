@@ -246,16 +246,16 @@ impl ContextWindow {
 
     /// More accurate token estimation
     fn estimate_tokens(text: &str) -> u32 {
-        // Better heuristic: 
+        // Better heuristic:
         // - Average English text: ~4 characters per token
         // - Code/JSON: ~3 characters per token (more symbols)
         // - Add 10% buffer for safety
         let base_estimate = if text.contains("{") || text.contains("```") || text.contains("fn ") {
-            (text.len() as f32 / 3.0).ceil() as u32  // Code/JSON
+            (text.len() as f32 / 3.0).ceil() as u32 // Code/JSON
         } else {
-            (text.len() as f32 / 4.0).ceil() as u32  // Regular text
+            (text.len() as f32 / 4.0).ceil() as u32 // Regular text
         };
-        (base_estimate as f32 * 1.1).ceil() as u32  // Add 10% buffer
+        (base_estimate as f32 * 1.1).ceil() as u32 // Add 10% buffer
     }
 
     pub fn update_usage(&mut self, usage: &g3_providers::Usage) {
@@ -275,20 +275,19 @@ impl ContextWindow {
         self.total_tokens.saturating_sub(self.used_tokens)
     }
 
-
     /// Check if we should trigger summarization (at 80% capacity)
     pub fn should_summarize(&self) -> bool {
         // Trigger at 80% OR if we're getting close to absolute limits
         // This prevents issues with models that have large contexts but still hit limits
         let percentage_trigger = self.percentage_used() >= 80.0;
-        
+
         // Also trigger if we're approaching common token limits
         // Most models start having issues around 150k tokens
         let absolute_trigger = self.used_tokens > 150_000;
-        
+
         percentage_trigger || absolute_trigger
     }
-    
+
     /// Create a summary request prompt for the current conversation
     pub fn create_summary_prompt(&self) -> String {
         "Please provide a comprehensive summary of our conversation so far. Include:
@@ -578,6 +577,7 @@ impl Agent {
                 "You are G3, an AI programming agent. Your goal is to analyze, write and modify code to achieve given goals.
 
 You have access to tools. When you need to accomplish a task, you MUST use the appropriate tool. Do not just describe what you would do - actually use the tools.
+Always start by reading the project's README. Create one if this is a new project or making major changes.
 
 IMPORTANT: You must call tools to achieve goals. When you receive a request:
 1. Analyze and identify what needs to be done
@@ -947,42 +947,47 @@ The tool will execute immediately and you'll receive the result (success or erro
         // Check if we need to summarize before starting
         if self.context_window.should_summarize() {
             info!(
-                "Context window at {}% ({}/{} tokens), triggering auto-summarization", 
+                "Context window at {}% ({}/{} tokens), triggering auto-summarization",
                 self.context_window.percentage_used() as u32,
                 self.context_window.used_tokens,
                 self.context_window.total_tokens
             );
-            
+
             // Notify user about summarization
-            println!("\n📊 Context window reaching capacity ({}%). Creating summary...", 
-                self.context_window.percentage_used() as u32);
-            
+            println!(
+                "\n📊 Context window reaching capacity ({}%). Creating summary...",
+                self.context_window.percentage_used() as u32
+            );
+
             // Create summary request with FULL history
             let summary_prompt = self.context_window.create_summary_prompt();
-            
+
             // Get the full conversation history
-            let conversation_text = self.context_window.conversation_history
+            let conversation_text = self
+                .context_window
+                .conversation_history
                 .iter()
                 .map(|m| format!("{:?}: {}", m.role, m.content))
                 .collect::<Vec<_>>()
                 .join("\n\n");
-            
+
             let summary_messages = vec![
                 Message {
                     role: MessageRole::System,
-                    content: "You are a helpful assistant that creates concise summaries.".to_string(),
+                    content: "You are a helpful assistant that creates concise summaries."
+                        .to_string(),
                 },
                 Message {
                     role: MessageRole::User,
-                    content: format!("Based on this conversation history, {}\n\nConversation:\n{}", 
-                        summary_prompt,
-                        conversation_text
+                    content: format!(
+                        "Based on this conversation history, {}\n\nConversation:\n{}",
+                        summary_prompt, conversation_text
                     ),
                 },
             ];
 
             let provider = self.providers.get(None)?;
-            
+
             // Dynamically calculate max_tokens for summary based on what's left
             // We need to ensure: used_tokens + max_tokens <= total_context_limit
             let summary_max_tokens = match provider.name() {
@@ -992,7 +997,9 @@ The tool will execute immediately and you'll receive the result (success or erro
                     let model_limit = 200_000u32;
                     let current_usage = self.context_window.used_tokens;
                     // Leave some buffer (5k tokens) for safety
-                    let available = model_limit.saturating_sub(current_usage).saturating_sub(5000);
+                    let available = model_limit
+                        .saturating_sub(current_usage)
+                        .saturating_sub(5000);
                     // Cap at a reasonable summary size (10k tokens max)
                     Some(available.min(10_000))
                 }
@@ -1001,7 +1008,9 @@ The tool will execute immediately and you'll receive the result (success or erro
                     let model_limit = self.context_window.total_tokens;
                     let current_usage = self.context_window.used_tokens;
                     // Leave 1k buffer
-                    let available = model_limit.saturating_sub(current_usage).saturating_sub(1000);
+                    let available = model_limit
+                        .saturating_sub(current_usage)
+                        .saturating_sub(1000);
                     // Cap at 3k for embedded models
                     Some(available.min(3000))
                 }
@@ -1011,10 +1020,12 @@ The tool will execute immediately and you'll receive the result (success or erro
                     Some(available.min(5000))
                 }
             };
-            
-            info!("Requesting summary with max_tokens: {:?} (current usage: {} tokens)", 
-                summary_max_tokens, self.context_window.used_tokens);
-            
+
+            info!(
+                "Requesting summary with max_tokens: {:?} (current usage: {} tokens)",
+                summary_max_tokens, self.context_window.used_tokens
+            );
+
             let summary_request = CompletionRequest {
                 messages: summary_messages,
                 max_tokens: summary_max_tokens,
@@ -1603,93 +1614,113 @@ The tool will execute immediately and you'll receive the result (success or erro
             }
             "edit_file" => {
                 debug!("Processing edit_file tool call");
-                
-                // Extract arguments
-                let args_obj = tool_call.args.as_object();
-                if args_obj.is_none() {
-                    return Ok("❌ Invalid arguments: expected object".to_string());
-                }
-                let args_obj = args_obj.unwrap();
-                
-                // Get file_path
-                let file_path = args_obj.get("file_path")
-                    .and_then(|v| v.as_str());
-                if file_path.is_none() {
-                    return Ok("❌ Missing file_path argument".to_string());
-                }
-                let file_path = file_path.unwrap();
-                
-                // Get content
-                let content = args_obj.get("content")
-                    .and_then(|v| v.as_str());
-                if content.is_none() {
-                    return Ok("❌ Missing content argument".to_string());
-                }
-                let content = content.unwrap();
-                
-                // Get start_of_range
-                let start_of_range = args_obj.get("start_of_range")
-                    .and_then(|v| v.as_i64())
-                    .map(|v| v as usize);
-                if start_of_range.is_none() {
-                    return Ok("❌ Missing or invalid start_of_range argument".to_string());
-                }
-                let start_of_range = start_of_range.unwrap();
-                
-                // Get end_of_range
-                let end_of_range = args_obj.get("end_of_range")
-                    .and_then(|v| v.as_i64())
-                    .map(|v| v as usize);
-                if end_of_range.is_none() {
-                    return Ok("❌ Missing or invalid end_of_range argument".to_string());
-                }
-                let end_of_range = end_of_range.unwrap();
-                
-                // Validate range
-                if start_of_range < 1 {
-                    return Ok("❌ start_of_range must be >= 1 (lines are 1-indexed)".to_string());
-                }
-                if end_of_range < start_of_range {
-                    return Ok("❌ end_of_range must be >= start_of_range".to_string());
-                }
-                
+
+                // Extract arguments with better error handling
+                let args_obj = match tool_call.args.as_object() {
+                    Some(obj) => obj,
+                    None => return Ok("❌ Invalid arguments: expected object".to_string()),
+                };
+
+                let file_path = match args_obj.get("file_path").and_then(|v| v.as_str()) {
+                    Some(path) => path,
+                    None => return Ok("❌ Missing or invalid file_path argument".to_string()),
+                };
+
+                let content = match args_obj.get("content").and_then(|v| v.as_str()) {
+                    Some(c) => c,
+                    None => return Ok("❌ Missing or invalid content argument".to_string()),
+                };
+
+                let start_line = match args_obj.get("start_of_range").and_then(|v| v.as_i64()) {
+                    Some(n) if n >= 1 => n as usize,
+                    Some(_) => {
+                        return Ok(
+                            "❌ start_of_range must be >= 1 (lines are 1-indexed)".to_string()
+                        )
+                    }
+                    None => return Ok("❌ Missing or invalid start_of_range argument".to_string()),
+                };
+
+                let end_line = match args_obj.get("end_of_range").and_then(|v| v.as_i64()) {
+                    Some(n) if n >= start_line as i64 => n as usize,
+                    Some(_) => return Ok("❌ end_of_range must be >= start_of_range".to_string()),
+                    None => return Ok("❌ Missing or invalid end_of_range argument".to_string()),
+                };
+
+                debug!(
+                    "edit_file: path={}, start={}, end={}",
+                    file_path, start_line, end_line
+                );
+
                 // Read the existing file
                 let existing_content = match std::fs::read_to_string(file_path) {
                     Ok(content) => content,
                     Err(e) => return Ok(format!("❌ Failed to read file '{}': {}", file_path, e)),
                 };
-                
-                // Split into lines
-                let mut lines: Vec<String> = existing_content.lines().map(|s| s.to_string()).collect();
-                
-                // Check if range is valid
-                if start_of_range > lines.len() + 1 {
-                    return Ok(format!("❌ start_of_range {} exceeds file length ({} lines)", start_of_range, lines.len()));
+
+                // Split into lines, preserving empty lines
+                let mut lines: Vec<String> =
+                    existing_content.lines().map(|s| s.to_string()).collect();
+                let original_line_count = lines.len();
+
+                // Validate the range
+                if start_line > lines.len() {
+                    // Allow appending at the end if start_line == lines.len() + 1
+                    if start_line == lines.len() + 1 && end_line == start_line {
+                        // This is an append operation
+                        lines.extend(content.lines().map(|s| s.to_string()));
+
+                        // Write back to file
+                        let new_content = lines.join("\n");
+                        match std::fs::write(file_path, &new_content) {
+                            Ok(()) => {
+                                let lines_added = content.lines().count();
+                                return Ok(format!(
+                                    "✅ Successfully appended {} lines to '{}'. File now has {} lines (was {} lines)",
+                                    lines_added, file_path, lines.len(), original_line_count
+                                ));
+                            }
+                            Err(e) => {
+                                return Ok(format!(
+                                    "❌ Failed to write to file '{}': {}",
+                                    file_path, e
+                                ))
+                            }
+                        }
+                    } else {
+                        return Ok(format!(
+                            "❌ start_of_range {} exceeds file length ({} lines)",
+                            start_line,
+                            lines.len()
+                        ));
+                    }
                 }
-                
-                // Prepare new content lines
+
+                // Split the new content into lines
                 let new_lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
-                
-                // Calculate the actual end of range (capped at file length)
-                let actual_end = end_of_range.min(lines.len());
-                
-                // Replace the range with new content
-                // Convert to 0-indexed for vector operations
-                let start_idx = start_of_range - 1;
-                let end_idx = actual_end;
-                
-                // Remove old lines and insert new ones
+
+                // Perform the replacement
+                // Convert from 1-indexed (inclusive) to 0-indexed range for splice
+                // splice takes start..end where end is EXCLUSIVE, so for inclusive end_line, we need end_line + 1
+                let start_idx = start_line - 1;
+                let end_idx = (end_line + 1).min(lines.len() + 1); // +1 because splice end is exclusive
+                let actual_end_line = end_line.min(lines.len()); // For reporting
+                let lines_being_replaced = actual_end_line - start_line + 1;
+
+                debug!(
+                    "Replacing lines {}..={} (0-indexed splice: {}..{})",
+                    start_line, end_line, start_idx, end_idx
+                );
                 lines.splice(start_idx..end_idx, new_lines.clone());
-                
-                // Write back to file
+
+                // Write the result back to the file
                 let new_content = lines.join("\n");
                 match std::fs::write(file_path, &new_content) {
                     Ok(()) => {
-                        let lines_replaced = end_idx - start_idx;
-                        let lines_added = new_lines.len();
                         Ok(format!(
-                            "✅ Successfully edited '{}': replaced {} lines ({}-{}) with {} lines. File now has {} lines",
-                            file_path, lines_replaced, start_of_range, actual_end, lines_added, lines.len()
+                            "✅ Successfully edited '{}': replaced {} lines ({}-{}) with {} lines. File now has {} lines (was {} lines)",
+                            file_path, lines_being_replaced, start_line, actual_end_line,
+                            new_lines.len(), lines.len(), original_line_count
                         ))
                     }
                     Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", file_path, e)),
