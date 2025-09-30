@@ -624,9 +624,9 @@ The tool will execute immediately and you'll receive the result (success or erro
   - Format: {\"tool\": \"write_file\", \"args\": {\"file_path\": \"path/to/file\", \"content\": \"file content\"}}
   - Example: {\"tool\": \"write_file\", \"args\": {\"file_path\": \"src/lib.rs\", \"content\": \"pub fn hello() {}\"}}
 
-- **edit_file**: Edit a specific range of lines in a file
-  - Format: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"path/to/file\", \"content\": \"replacement text\", \"start_of_range\": 1, \"end_of_range\": 3}}
-  - Example: {\"tool\": \"edit_file\", \"args\": {\"file_path\": \"src/main.rs\", \"content\": \"println!(\\\"Hello, world!\\\");\", \"start_of_range\": 5, \"end_of_range\": 7}}
+- **str_replace**: Replace text in a file using a diff
+  - Format: {\"tool\": \"str_replace\", \"args\": {\"file_path\": \"path/to/file\", \"diff\": \"--- old\\n-old text\\n+++ new\\n+new text\"}}
+  - Example: {\"tool\": \"str_replace\", \"args\": {\"file_path\": \"src/main.rs\", \"diff\": \"--- old\\n-println!(\\\"old\\\");\\n+++ new\\n+println!(\\\"new\\\");\"}}
 
 - **final_output**: Signal task completion with a detailed summary of work done in markdown format
   - Format: {\"tool\": \"final_output\", \"args\": {\"summary\": \"what_was_accomplished\"}}
@@ -890,24 +890,53 @@ The tool will execute immediately and you'll receive the result (success or erro
                 input_schema: json!({
                     "type": "object",
                     "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The content to write to the file"
+                        }
+                    },
+                    "required": ["file_path", "content"]
+                }),
+            },
+            // Commented out edit_file tool to prevent g3 from using it
+            // Tool {
+            //     name: "edit_file".to_string(),
+            //     description: "Edit a specific range of lines in a file. Replaces lines from start_of_range to end_of_range (inclusive, 1-indexed) with new content.".to_string(),
+            //     input_schema: json!({
+            //         "type": "object",
+            //         "properties": {
+            //             "file_path": {"type": "string", "description": "The path to the file to edit"},
+            //             "content": {"type": "string", "description": "The new content to replace the specified range"},
+            //             "start_of_range": {"type": "integer", "description": "The starting line number (1-indexed, inclusive)"},
+            //             "end_of_range": {"type": "integer", "description": "The ending line number (1-indexed, inclusive)"}
+            //         },
+            //         "required": ["file_path", "content", "start_of_range", "end_of_range"]
+            //     }),
+            // },
+            Tool {
+                name: "str_replace".to_string(),
+                description: "Replace text in a file using a unified diff. The diff specifies exact text to find and replace. Character ranges are 0-indexed and end is EXCLUSIVE (like Python slicing). For example, text[0:5] gets characters 0,1,2,3,4 (not 5).".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
                         "file_path": {
                             "type": "string",
                             "description": "The path to the file to edit"
                         },
-                        "content": {
+                        "diff": {
                             "type": "string",
-                            "description": "The new content to replace the specified range"
+                            "description": "A unified diff showing what to replace. Use --- for old content and +++ for new content"
                         },
-                        "start_of_range": {
+                        "start": {
                             "type": "integer",
-                            "description": "The starting line number (1-indexed, inclusive)"
+                            "description": "Starting character position in the file (0-indexed, inclusive). If omitted, searches from beginning."
                         },
-                        "end_of_range": {
+                        "end": {
                             "type": "integer",
-                            "description": "The ending line number (1-indexed, inclusive)"
+                            "description": "Ending character position in the file (0-indexed, EXCLUSIVE - character at this position is NOT included). If omitted, searches to end of file."
                         }
                     },
-                    "required": ["file_path", "content", "start_of_range", "end_of_range"]
+                    "required": ["file_path", "diff"]
                 }),
             },
             Tool {
@@ -1726,6 +1755,116 @@ The tool will execute immediately and you'll receive the result (success or erro
                     Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", file_path, e)),
                 }
             }
+            "str_replace" => {
+                debug!("Processing str_replace tool call");
+
+                // Extract arguments
+                let args_obj = match tool_call.args.as_object() {
+                    Some(obj) => obj,
+                    None => return Ok("❌ Invalid arguments: expected object".to_string()),
+                };
+
+                let file_path = match args_obj.get("file_path").and_then(|v| v.as_str()) {
+                    Some(path) => path,
+                    None => return Ok("❌ Missing or invalid file_path argument".to_string()),
+                };
+
+                let diff = match args_obj.get("diff").and_then(|v| v.as_str()) {
+                    Some(d) => d,
+                    None => return Ok("❌ Missing or invalid diff argument".to_string()),
+                };
+
+                // Optional start and end character positions (0-indexed, end is EXCLUSIVE)
+                let start_char = args_obj.get("start").and_then(|v| v.as_u64()).map(|n| n as usize);
+                let end_char = args_obj.get("end").and_then(|v| v.as_u64()).map(|n| n as usize);
+
+                debug!("str_replace: path={}, start={:?}, end={:?}", file_path, start_char, end_char);
+
+                // Read the existing file
+                let file_content = match std::fs::read_to_string(file_path) {
+                    Ok(content) => content,
+                    Err(e) => return Ok(format!("❌ Failed to read file '{}': {}", file_path, e)),
+                };
+
+                // Parse the diff to extract old and new content
+                let (old_content, new_content) = match parse_unified_diff(diff) {
+                    Some((old, new)) => (old, new),
+                    None => return Ok("❌ Invalid diff format. Expected unified diff with --- (old) and +++ (new) sections".to_string()),
+                };
+
+                debug!("Parsed diff: old_len={}, new_len={}", old_content.len(), new_content.len());
+
+                // Determine the search range
+                let search_start = start_char.unwrap_or(0);
+                let search_end = end_char.unwrap_or(file_content.len());
+
+                // Validate the range
+                if search_start > file_content.len() {
+                    return Ok(format!("❌ start position {} exceeds file length {}", search_start, file_content.len()));
+                }
+                if search_end > file_content.len() {
+                    return Ok(format!("❌ end position {} exceeds file length {}", search_end, file_content.len()));
+                }
+                if search_start > search_end {
+                    return Ok(format!("❌ start position {} is greater than end position {}", search_start, search_end));
+                }
+
+                // Extract the search region
+                let search_region = &file_content[search_start..search_end];
+
+                // Find the old content within the search region
+                let position_in_region = match search_region.find(&old_content) {
+                    Some(pos) => pos,
+                    None => {
+                        // Provide helpful context about what wasn't found
+                        let preview_len = 100.min(old_content.len());
+                        let old_preview = if old_content.len() > preview_len {
+                            format!("{}...", &old_content[..preview_len])
+                        } else {
+                            old_content.clone()
+                        };
+                        
+                        return Ok(format!(
+                            "❌ Pattern not found in file{}\nSearched for: {}",
+                            if start_char.is_some() || end_char.is_some() {
+                                format!(" (within character range {}:{})", search_start, search_end)
+                            } else {
+                                String::new()
+                            },
+                            old_preview
+                        ));
+                    }
+                };
+
+                // Calculate the absolute position in the file
+                let absolute_position = search_start + position_in_region;
+                let replace_end = absolute_position + old_content.len();
+
+                debug!("Found pattern at position {} (absolute), replacing until {}", absolute_position, replace_end);
+
+                // Perform the replacement
+                let mut result = String::with_capacity(file_content.len());
+                result.push_str(&file_content[..absolute_position]);
+                result.push_str(&new_content);
+                result.push_str(&file_content[replace_end..]);
+
+                // Write the result back to the file
+                match std::fs::write(file_path, &result) {
+                    Ok(()) => {
+                        // Count lines for reporting
+                        let old_lines = old_content.lines().count();
+                        let new_lines = new_content.lines().count();
+                        let chars_replaced = old_content.len();
+                        let chars_added = new_content.len();
+                        
+                        Ok(format!(
+                            "✅ Successfully replaced text in '{}'\n   Replaced {} characters ({} lines) at position {} with {} characters ({} lines)",
+                            file_path, chars_replaced, old_lines, absolute_position, chars_added, new_lines
+                        ))
+                    }
+                    Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", file_path, e)),
+                }
+            }
             "final_output" => {
                 if let Some(summary) = tool_call.args.get("summary") {
                     if let Some(summary_str) = summary.as_str() {
@@ -1810,6 +1949,56 @@ fn filter_json_tool_calls(content: &str) -> String {
             content.to_string()
         }
     }
+}
+
+// Helper function to parse a unified diff into old and new content
+fn parse_unified_diff(diff: &str) -> Option<(String, String)> {
+    // Simple approach: look for lines starting with - (old) and + (new)
+    // This is a simplified parser that handles basic diffs
+    let mut old_lines = Vec::new();
+    let mut new_lines = Vec::new();
+    let mut found_old = false;
+    let mut found_new = false;
+    
+    for line in diff.lines() {
+        if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") {
+            // Skip diff headers
+            continue;
+        } else if line.starts_with("-") && !line.starts_with("---") {
+            // Old content line
+            old_lines.push(&line[1..]); // Remove the leading -
+            found_old = true;
+        } else if line.starts_with("+") && !line.starts_with("+++") {
+            // New content line
+            new_lines.push(&line[1..]); // Remove the leading +
+            found_new = true;
+        } else if line.starts_with(" ") {
+            // Context line (unchanged) - add to both old and new
+            let _content = &line[1..];
+            // Only add context lines if we're building a diff
+            if found_old || found_new {
+                // Context lines should be added to the side we're currently building
+                // This is a simplified approach
+            }
+        }
+    }
+    
+    // If we didn't find explicit diff markers, try a simpler format:
+    // Just look for "old content" followed by "new content" separated by some delimiter
+    if !found_old && !found_new {
+        // Alternative: split on common separators
+        if let Some(separator_pos) = diff.find("\n===\n").or_else(|| diff.find("\n---\n")).or_else(|| diff.find("\n\n")) {
+            let old_content = diff[..separator_pos].trim();
+            let new_content = diff[separator_pos..].trim().trim_start_matches("===").trim_start_matches("---").trim();
+            return Some((old_content.to_string(), new_content.to_string()));
+        }
+        // If no separator found, treat entire diff as old content to be replaced with empty
+        return Some((diff.trim().to_string(), String::new()));
+    }
+    
+    let old_content = old_lines.join("\n");
+    let new_content = new_lines.join("\n");
+    Some((old_content, new_content))
 }
 
 // Helper function to properly escape shell commands
