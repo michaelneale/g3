@@ -789,11 +789,20 @@ The tool will execute immediately and you'll receive the result (success or erro
             .unwrap_or_default()
             .as_secs();
 
+        // Create logs directory if it doesn't exist
+        let logs_dir = std::path::Path::new("logs");
+        if !logs_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(logs_dir) {
+                error!("Failed to create logs directory: {}", e);
+                return;
+            }
+        }
+
         // Use session-based filename if we have a session ID, otherwise fall back to timestamp
         let filename = if let Some(ref session_id) = self.session_id {
-            format!("g3_session_{}.json", session_id)
+            format!("logs/g3_session_{}.json", session_id)
         } else {
-            format!("g3_context_{}.json", timestamp)
+            format!("logs/g3_context_{}.json", timestamp)
         };
 
         let context_data = serde_json::json!({

@@ -107,6 +107,15 @@ cargo run
 g3 "implement a function to calculate fibonacci numbers"
 ```
 
+## Session Logs
+
+G3 automatically saves session logs for each interaction in the `logs/` directory. These logs contain:
+- Complete conversation history
+- Token usage statistics
+- Timestamps and session status
+
+The `logs/` directory is created automatically on first use and is excluded from version control.
+
 ## License
 
 MIT License - see LICENSE file for details
