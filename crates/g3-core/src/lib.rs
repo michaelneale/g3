@@ -915,7 +915,7 @@ The tool will execute immediately and you'll receive the result (success or erro
             // },
             Tool {
                 name: "str_replace".to_string(),
-                description: "Replace text in a file using a unified diff. The diff specifies exact text to find and replace. Character ranges are 0-indexed and end is EXCLUSIVE (like Python slicing). For example, text[0:5] gets characters 0,1,2,3,4 (not 5).".to_string(),
+                description: "Apply a unified diff to a file. Supports multiple hunks and context lines. Optionally constrain the search to a [start, end) character range (0-indexed; end is EXCLUSIVE). Useful to disambiguate matches or limit scope in large files.".to_string(),
                 input_schema: json!({
                     "type": "object",
                     "properties": {
@@ -925,7 +925,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                         },
                         "diff": {
                             "type": "string",
-                            "description": "A unified diff showing what to replace. Use --- for old content and +++ for new content"
+                            "description": "A unified diff showing what to replace. Supports @@ hunk headers, context lines, and multiple hunks (---/+++ headers optional for minimal diffs)."
                         },
                         "start": {
                             "type": "integer",
@@ -1784,10 +1784,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                     .and_then(|v| v.as_u64())
                     .map(|n| n as usize);
 
-                debug!(
-                    "str_replace: path={}, start={:?}, end={:?}",
-                    file_path, start_char, end_char
-                );
+                debug!("str_replace: path={}, start={:?}, end={:?}", file_path, start_char, end_char);
 
                 // Read the existing file
                 let file_content = match std::fs::read_to_string(file_path) {
@@ -1795,99 +1792,16 @@ The tool will execute immediately and you'll receive the result (success or erro
                     Err(e) => return Ok(format!("❌ Failed to read file '{}': {}", file_path, e)),
                 };
 
-                // Parse the diff to extract old and new content
-                let (old_content, new_content) = match parse_unified_diff(diff) {
-                    Some((old, new)) => (old, new),
-                    None => return Ok("❌ Invalid diff format. Expected unified diff with --- (old) and +++ (new) sections".to_string()),
+                // Apply unified diff to content
+                let result = match apply_unified_diff_to_string(&file_content, diff, start_char, end_char) {
+                    Ok(r) => r,
+                    Err(e) => return Ok(format!("❌ {}", e)),
                 };
-
-                debug!(
-                    "Parsed diff: old_len={}, new_len={}",
-                    old_content.len(),
-                    new_content.len()
-                );
-
-                // Determine the search range
-                let search_start = start_char.unwrap_or(0);
-                let search_end = end_char.unwrap_or(file_content.len());
-
-                // Validate the range
-                if search_start > file_content.len() {
-                    return Ok(format!(
-                        "❌ start position {} exceeds file length {}",
-                        search_start,
-                        file_content.len()
-                    ));
-                }
-                if search_end > file_content.len() {
-                    return Ok(format!(
-                        "❌ end position {} exceeds file length {}",
-                        search_end,
-                        file_content.len()
-                    ));
-                }
-                if search_start > search_end {
-                    return Ok(format!(
-                        "❌ start position {} is greater than end position {}",
-                        search_start, search_end
-                    ));
-                }
-
-                // Extract the search region
-                let search_region = &file_content[search_start..search_end];
-
-                // Find the old content within the search region
-                let position_in_region = match search_region.find(&old_content) {
-                    Some(pos) => pos,
-                    None => {
-                        // Provide helpful context about what wasn't found
-                        let preview_len = 100.min(old_content.len());
-                        let old_preview = if old_content.len() > preview_len {
-                            format!("{}...", &old_content[..preview_len])
-                        } else {
-                            old_content.clone()
-                        };
-
-                        return Ok(format!(
-                            "❌ Pattern not found in file{}\nSearched for: {}",
-                            if start_char.is_some() || end_char.is_some() {
-                                format!(" (within character range {}:{})", search_start, search_end)
-                            } else {
-                                String::new()
-                            },
-                            old_preview
-                        ));
-                    }
-                };
-
-                // Calculate the absolute position in the file
-                let absolute_position = search_start + position_in_region;
-                let replace_end = absolute_position + old_content.len();
-
-                debug!(
-                    "Found pattern at position {} (absolute), replacing until {}",
-                    absolute_position, replace_end
-                );
-
-                // Perform the replacement
-                let mut result = String::with_capacity(file_content.len());
-                result.push_str(&file_content[..absolute_position]);
-                result.push_str(&new_content);
-                result.push_str(&file_content[replace_end..]);
 
                 // Write the result back to the file
                 match std::fs::write(file_path, &result) {
                     Ok(()) => {
-                        // Count lines for reporting
-                        let old_lines = old_content.lines().count();
-                        let new_lines = new_content.lines().count();
-                        let chars_replaced = old_content.len();
-                        let chars_added = new_content.len();
-
-                        Ok(format!(
-                            "✅ Successfully replaced text in '{}'\n   Replaced {} characters ({} lines) at position {} with {} characters ({} lines)",
-                            file_path, chars_replaced, old_lines, absolute_position, chars_added, new_lines
-                        ))
+                        Ok(format!("✅ Successfully applied unified diff to '{}'", file_path))
                     }
                     Err(e) => Ok(format!("❌ Failed to write to file '{}': {}", file_path, e)),
                 }
@@ -1978,62 +1892,167 @@ fn filter_json_tool_calls(content: &str) -> String {
     }
 }
 
-// Helper function to parse a unified diff into old and new content
-fn parse_unified_diff(diff: &str) -> Option<(String, String)> {
-    // Simple approach: look for lines starting with - (old) and + (new)
-    // This is a simplified parser that handles basic diffs
-    let mut old_lines = Vec::new();
-    let mut new_lines = Vec::new();
-    let mut found_old = false;
-    let mut found_new = false;
+// Apply unified diff to an input string with optional [start, end) bounds
+pub fn apply_unified_diff_to_string(
+    file_content: &str,
+    diff: &str,
+    start_char: Option<usize>,
+    end_char: Option<usize>,
+) -> Result<String> {
+    // Parse full unified diff into hunks and apply sequentially.
+    let hunks = parse_unified_diff_hunks(diff);
+    if hunks.is_empty() {
+        anyhow::bail!(
+            "Invalid diff format. Expected unified diff with @@ hunks or +/- with context lines"
+        );
+    }
 
-    for line in diff.lines() {
-        if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") {
-            // Skip diff headers
+    // Normalize line endings to avoid CRLF/CR mismatches
+    let content_norm = file_content
+        .replace("\r\n", "\n")
+        .replace('\r', "\n");
+
+    // Determine and validate the search range
+    let search_start = start_char.unwrap_or(0);
+    let search_end = end_char.unwrap_or(content_norm.len());
+
+    if search_start > content_norm.len() {
+        anyhow::bail!(
+            "start position {} exceeds file length {}",
+            search_start,
+            content_norm.len()
+        );
+    }
+    if search_end > content_norm.len() {
+        anyhow::bail!(
+            "end position {} exceeds file length {}",
+            search_end,
+            content_norm.len()
+        );
+    }
+    if search_start > search_end {
+        anyhow::bail!(
+            "start position {} is greater than end position {}",
+            search_start, search_end
+        );
+    }
+
+    // Extract the region we're going to modify (whole file if no bounds provided)
+    let mut region_content = content_norm[search_start..search_end].to_string();
+
+    // Apply hunks in order
+    for (idx, (old_block, new_block)) in hunks.iter().enumerate() {
+        debug!(
+            "Applying hunk {}: old_len={}, new_len={}",
+            idx + 1,
+            old_block.len(),
+            new_block.len()
+        );
+
+        if let Some(pos) = region_content.find(old_block) {
+            let endpos = pos + old_block.len();
+            region_content.replace_range(pos..endpos, new_block);
+        } else {
+            // Not found; provide helpful diagnostics with a short preview
+            let preview_len = old_block.len().min(200);
+            let mut old_preview = old_block[..preview_len].to_string();
+            if old_block.len() > preview_len {
+                old_preview.push_str("...");
+            }
+
+            let range_note = if start_char.is_some() || end_char.is_some() {
+                format!(" (within character range {}:{})", search_start, search_end)
+            } else {
+                String::new()
+            };
+
+            anyhow::bail!(
+                "Pattern not found in file{}\nHunk {} failed. Searched for:\n{}",
+                range_note,
+                idx + 1,
+                old_preview
+            );
+        }
+    }
+
+    // Reconstruct the full content with the modified region
+    let mut result = String::with_capacity(content_norm.len() + region_content.len());
+    result.push_str(&content_norm[..search_start]);
+    result.push_str(&region_content);
+    result.push_str(&content_norm[search_end..]);
+    Ok(result)
+}
+
+// Parse a unified diff into a list of hunks as (old_block, new_block)
+// Each hunk contains the exact text to search for and the replacement text including context lines.
+fn parse_unified_diff_hunks(diff: &str) -> Vec<(String, String)> {
+    let mut hunks: Vec<(String, String)> = Vec::new();
+
+    let mut old_lines: Vec<String> = Vec::new();
+    let mut new_lines: Vec<String> = Vec::new();
+    let mut in_hunk = false;
+
+    for raw_line in diff.lines() {
+        let line = raw_line;
+
+        // Skip common diff headers
+        if line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("new file mode")
+            || line.starts_with("deleted file mode")
+        {
             continue;
-        } else if line.starts_with("-") && !line.starts_with("---") {
-            // Old content line
-            old_lines.push(&line[1..]); // Remove the leading -
-            found_old = true;
-        } else if line.starts_with("+") && !line.starts_with("+++") {
-            // New content line
-            new_lines.push(&line[1..]); // Remove the leading +
-            found_new = true;
-        } else if line.starts_with(" ") {
-            // Context line (unchanged) - add to both old and new
-            let _content = &line[1..];
-            // Only add context lines if we're building a diff
-            if found_old || found_new {
-                // Context lines should be added to the side we're currently building
-                // This is a simplified approach
+        }
+
+        if line.starts_with("--- ") || line.starts_with("+++ ") {
+            // File header lines — ignore
+            continue;
+        }
+
+        if line.starts_with("@@") {
+            // Starting a new hunk — flush previous if present
+            if in_hunk && (!old_lines.is_empty() || !new_lines.is_empty()) {
+                hunks.push((old_lines.join("\n"), new_lines.join("\n")));
+                old_lines.clear();
+                new_lines.clear();
+            }
+            in_hunk = true;
+            continue;
+        }
+
+        if !in_hunk {
+            // Some minimal diffs may omit @@; start collecting once we see diff markers
+            if line.starts_with(' ')
+                || (line.starts_with('-') && !line.starts_with("---"))
+                || (line.starts_with('+') && !line.starts_with("+++"))
+            {
+                in_hunk = true;
+            } else {
+                continue;
             }
         }
-    }
 
-    // If we didn't find explicit diff markers, try a simpler format:
-    // Just look for "old content" followed by "new content" separated by some delimiter
-    if !found_old && !found_new {
-        // Alternative: split on common separators
-        if let Some(separator_pos) = diff
-            .find("\n===\n")
-            .or_else(|| diff.find("\n---\n"))
-            .or_else(|| diff.find("\n\n"))
-        {
-            let old_content = diff[..separator_pos].trim();
-            let new_content = diff[separator_pos..]
-                .trim()
-                .trim_start_matches("===")
-                .trim_start_matches("---")
-                .trim();
-            return Some((old_content.to_string(), new_content.to_string()));
+        if line.starts_with(' ') {
+            let content = &line[1..];
+            old_lines.push(content.to_string());
+            new_lines.push(content.to_string());
+        } else if line.starts_with('+') && !line.starts_with("+++") {
+            new_lines.push(line[1..].to_string());
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            old_lines.push(line[1..].to_string());
+        } else if line.starts_with('\\') {
+            // Example: "\\ No newline at end of file" — ignore
+            continue;
+        } else {
+            // Unknown line type — ignore
         }
-        // If no separator found, treat entire diff as old content to be replaced with empty
-        return Some((diff.trim().to_string(), String::new()));
     }
 
-    let old_content = old_lines.join("\n");
-    let new_content = new_lines.join("\n");
-    Some((old_content, new_content))
+    if in_hunk && (!old_lines.is_empty() || !new_lines.is_empty()) {
+        hunks.push((old_lines.join("\n"), new_lines.join("\n")));
+    }
+
+    hunks
 }
 
 // Helper function to properly escape shell commands
@@ -2234,4 +2253,53 @@ fn fix_mixed_quotes_in_json(json_str: &str) -> String {
 
 pub mod providers {
     pub mod embedded;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_unified_diff_hunks;
+
+    #[test]
+    fn parses_minimal_unified_diff_without_hunk_header() {
+        let diff = "--- old\n-old text\n+++ new\n+new text\n";
+        let hunks = parse_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].0, "old text");
+        assert_eq!(hunks[0].1, "new text");
+    }
+
+    #[test]
+    fn parses_diff_with_context_and_hunk_headers() {
+        let diff = "@@ -1,3 +1,3 @@\n common\n-old\n+new\n common2\n";
+        let hunks = parse_unified_diff_hunks(diff);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(hunks[0].0, "common\nold\ncommon2");
+        assert_eq!(hunks[0].1, "common\nnew\ncommon2");
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::apply_unified_diff_to_string;
+
+    #[test]
+    fn apply_multi_hunk_unified_diff_to_string() {
+        let original = "line 1\nkeep\nold A\nkeep 2\nold B\nkeep 3\n";
+        let diff = "@@ -1,6 +1,6 @@\n line 1\n keep\n-old A\n+new A\n keep 2\n-old B\n+new B\n keep 3\n";
+        let result = apply_unified_diff_to_string(original, diff, None, None).unwrap();
+        let expected = "line 1\nkeep\nnew A\nkeep 2\nnew B\nkeep 3\n";
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn apply_diff_within_range_only() {
+        let original = "A\nold\nB\nold\nC\n";
+        // Only the first 'old' should be replaced due to range
+        let diff = "@@ -1,3 +1,3 @@\n A\n-old\n+NEW\n B\n";
+        let start = 0usize; // Start of file
+        let end = original.find("B\n").unwrap() + 2; // up to end of line 'B\n'
+        let result = apply_unified_diff_to_string(original, diff, Some(start), Some(end)).unwrap();
+        let expected = "A\nNEW\nB\nold\nC\n";
+        assert_eq!(result, expected);
+    }
 }
