@@ -9,11 +9,19 @@ pub struct SimpleOutput {
 impl SimpleOutput {
     pub fn new() -> Self {
         let mut mad_skin = MadSkin::default();
-        // Configure termimad skin for better markdown rendering
-        mad_skin.set_headers_fg(Color::Cyan);
-        mad_skin.bold.set_fg(Color::Yellow);
-        mad_skin.italic.set_fg(Color::Magenta);
-        mad_skin.code_block.set_bg(Color::Rgb { r: 40, g: 40, b: 40 });
+        // Dracula color scheme
+        // Background: #282a36, Foreground: #f8f8f2
+        // Colors: Cyan #8be9fd, Green #50fa7b, Orange #ffb86c, Pink #ff79c6, Purple #bd93f9, Red #ff5555, Yellow #f1fa8c
+        
+        mad_skin.set_headers_fg(Color::Rgb { r: 189, g: 147, b: 249 }); // Purple for headers
+        mad_skin.bold.set_fg(Color::Rgb { r: 255, g: 121, b: 198 });    // Pink for bold
+        mad_skin.italic.set_fg(Color::Rgb { r: 139, g: 233, b: 253 });  // Cyan for italic
+        mad_skin.code_block.set_bg(Color::Rgb { r: 68, g: 71, b: 90 }); // Dracula background variant
+        mad_skin.code_block.set_fg(Color::Rgb { r: 80, g: 250, b: 123 }); // Green for code text
+        mad_skin.inline_code.set_bg(Color::Rgb { r: 68, g: 71, b: 90 }); // Same background for inline code
+        mad_skin.inline_code.set_fg(Color::Rgb { r: 241, g: 250, b: 140 }); // Yellow for inline code
+        mad_skin.quote_mark.set_fg(Color::Rgb { r: 98, g: 114, b: 164 }); // Comment purple for quote marks
+        mad_skin.strikeout.set_fg(Color::Rgb { r: 255, g: 85, b: 85 });  // Red for strikethrough
         
         Self { mad_skin }
     }
