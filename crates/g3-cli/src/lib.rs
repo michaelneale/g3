@@ -397,13 +397,25 @@ async fn run_autonomous(
         };
 
         output.print("🎯 Starting player implementation...");
-        let player_result = agent
+        
+        // Execute player task and handle the result properly
+        match agent
             .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
-            .await;
-
-        if let Err(e) = player_result {
-            output.print(&format!("❌ Player implementation failed: {}", e));
+            .await
+        {
+            Ok(player_result) => {
+                // Display player's implementation result
+                output.print("📝 Player implementation completed:");
+                output.print_markdown(&player_result);
+            }
+            Err(e) => {
+                output.print(&format!("❌ Player implementation failed: {}", e));
+                // Continue to coach review even if player had an error
+            }
         }
+        
+        // Give some time for file operations to complete
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
         // Create a new agent instance for coach mode to ensure fresh context
         let config = g3_config::Config::load(None)?;

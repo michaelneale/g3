@@ -1222,6 +1222,7 @@ The tool will execute immediately and you'll receive the result (success or erro
             let mut parser = StreamingToolParser::new();
             let mut current_response = String::new();
             let mut tool_executed = false;
+            let mut chunks_received = 0;
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
@@ -1229,6 +1230,11 @@ The tool will execute immediately and you'll receive the result (success or erro
                         // Record time to first token
                         if first_token_time.is_none() && !chunk.content.is_empty() {
                             first_token_time = Some(stream_start.elapsed());
+                        }
+                        
+                        chunks_received += 1;
+                        if chunks_received == 1 {
+                            debug!("First chunk received: content_len={}, finished={}", chunk.content.len(), chunk.finished);
                         }
 
                         // Process chunk with the new parser
@@ -1442,13 +1448,29 @@ The tool will execute immediately and you'll receive the result (success or erro
                         }
 
                         if chunk.finished {
+                            debug!("Stream finished: tool_executed={}, current_response_len={}, full_response_len={}, chunks_received={}", 
+                                tool_executed, current_response.len(), full_response.len(), chunks_received);
+                            
                             // Stream finished - check if we should continue or return
                             if !tool_executed {
-                                // No tools were executed in this iteration, we're done
-                                full_response.push_str(&current_response);
+                                // No tools were executed in this iteration
+                                // Check if we got any response at all
+                                if current_response.is_empty() && full_response.is_empty() {
+                                    // No response received - this is an error condition
+                                    warn!("Stream finished without any content or tool calls");
+                                    warn!("Chunks received: {}", chunks_received);
+                                    return Err(anyhow::anyhow!(
+                                        "No response received from the model. The model may be experiencing issues or the request may have been malformed."
+                                    ));
+                                }
+                                
+                                // Add current response to full response if we have any
+                                if !current_response.is_empty() {
+                                    full_response.push_str(&current_response);
+                                }
+                                
                                 println!();
-                                let ttft =
-                                    first_token_time.unwrap_or_else(|| stream_start.elapsed());
+                                let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
                                 return Ok((full_response, ttft));
                             }
                             break; // Tool was executed, break to continue outer loop
@@ -1469,8 +1491,13 @@ The tool will execute immediately and you'll receive the result (success or erro
 
             // If we get here and no tool was executed, we're done
             if !tool_executed {
-                full_response.push_str(&current_response);
-                println!();
+                if current_response.is_empty() && full_response.is_empty() {
+                    warn!("Loop exited without any response after {} iterations", iteration_count);
+                } else {
+                    full_response.push_str(&current_response);
+                    println!();
+                }
+                
                 let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());
                 return Ok((full_response, ttft));
             }
