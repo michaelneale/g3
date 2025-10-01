@@ -303,7 +303,21 @@ fn truncate_for_logging(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}... (truncated, {} total chars)", &s[..max_len], s.len())
+        // Find a safe UTF-8 boundary to truncate at
+        // We need to ensure we don't cut in the middle of a multi-byte character
+        let mut truncate_at = max_len;
+        
+        // Walk backwards from max_len to find a character boundary
+        while truncate_at > 0 && !s.is_char_boundary(truncate_at) {
+            truncate_at -= 1;
+        }
+        
+        // If we couldn't find a boundary (shouldn't happen), use a safe default
+        if truncate_at == 0 {
+            truncate_at = max_len.min(s.len());
+        }
+        
+        format!("{}... (truncated, {} total bytes)", &s[..truncate_at], s.len())
     }
 }
 
@@ -395,5 +409,22 @@ mod tests {
         assert!(truncated.starts_with("This is a very long "));
         assert!(truncated.contains("truncated"));
         assert!(truncated.contains("total chars"));
+        assert!(truncated.contains("total bytes"));
+    }
+    
+    #[test]
+    fn test_truncate_with_multibyte_chars() {
+        // Test with multi-byte UTF-8 characters
+        let text_with_emoji = "Hello 👋 World 🌍 Test ✨ More text here";
+        let truncated = truncate_for_logging(text_with_emoji, 10);
+        // Should truncate at a valid UTF-8 boundary
+        assert!(truncated.starts_with("Hello "));
+        
+        // Test with box-drawing characters like the one causing the panic
+        let text_with_box = "Some text ┌─────┐ more text";
+        let truncated = truncate_for_logging(text_with_box, 12);
+        // Should not panic and should truncate at a valid boundary
+        assert!(truncated.contains("Some text"));
+        assert!(truncated.contains("truncated"));
     }
 }
