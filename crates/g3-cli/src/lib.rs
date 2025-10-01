@@ -8,6 +8,9 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+mod tui;
+use tui::SimpleOutput;
+
 #[derive(Parser)]
 #[command(name = "g3")]
 #[command(about = "A modular, composable AI coding agent")]
@@ -122,14 +125,16 @@ pub async fn run() -> Result<()> {
     } else if let Some(task) = cli.task {
         // Single-shot mode
         info!("Executing task: {}", task);
+        let output = SimpleOutput::new();
         let result = agent
             .execute_task_with_timing(&task, None, false, cli.show_prompt, cli.show_code, true)
             .await?;
-        println!("{}", result);
+        output.print_markdown(&result);
     } else {
+        let output = SimpleOutput::new();
         // Interactive mode (default)
         info!("Starting interactive mode");
-        println!("📁 Workspace: {}", project.workspace().display());
+        output.print(&format!("📁 Workspace: {}", project.workspace().display()));
         run_interactive(agent, cli.show_prompt, cli.show_code).await?;
     }
 
@@ -137,29 +142,30 @@ pub async fn run() -> Result<()> {
 }
 
 async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
+    let output = SimpleOutput::new();
 
-    println!();
-    println!("🤖 G3 AI Coding Agent - Interactive Mode");
-    println!(
+    output.print("");
+    output.print("🤖 G3 AI Coding Agent - Interactive Mode");
+    output.print(
         "I solve problems by writing and executing code. Tell me what you need to accomplish!"
     );
-    println!();
+    output.print("");
 
     // Display provider and model information
     match agent.get_provider_info() {
         Ok((provider, model)) => {
-            println!("🔧 Provider: {} | Model: {}", provider, model);
+            output.print(&format!("🔧 Provider: {} | Model: {}", provider, model));
         }
         Err(e) => {
             error!("Failed to get provider info: {}", e);
         }
     }
 
-    println!();
-    println!("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
-    println!("For multiline input: use \\ at the end of a line to continue");
-    println!("Submit multiline with Enter (without backslash)");
-    println!();
+    output.print("");
+    output.print("Type 'exit' or 'quit' to exit, use Up/Down arrows for command history");
+    output.print("For multiline input: use \\ at the end of a line to continue");
+    output.print("Submit multiline with Enter (without backslash)");
+    output.print("");
 
     // Initialize rustyline editor with history
     let mut rl = DefaultEditor::new()?;
@@ -180,7 +186,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
 
     loop {
         // Display context window progress bar before each prompt
-        display_context_progress(&agent);
+        display_context_progress(&agent, &output);
 
         // Adjust prompt based on whether we're in multi-line mode
         let prompt = if in_multiline { "... > " } else { "g3> " };
@@ -220,7 +226,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                     }
                     
                     // Process the multiline input
-                    execute_task(&mut agent, &input, show_prompt, show_code).await;
+                    execute_task(&mut agent, &input, show_prompt, show_code, &output).await;
                 } else {
                     // Single line input
                     let input = line.trim().to_string();
@@ -237,23 +243,23 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
                     rl.add_history_entry(&input)?;
                     
                     // Process the single line input
-                    execute_task(&mut agent, &input, show_prompt, show_code).await;
+                    execute_task(&mut agent, &input, show_prompt, show_code, &output).await;
                 }
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl-C pressed
                 if in_multiline {
                     // Cancel multiline input
-                    println!("Multi-line input cancelled");
+                    output.print("Multi-line input cancelled");
                     multiline_buffer.clear();
                     in_multiline = false;
                 } else {
-                    println!("CTRL-C");
+                    output.print("CTRL-C");
                 }
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
+                output.print("CTRL-D");
                 break;
             }
             Err(err) => {
@@ -268,14 +274,14 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
         let _ = rl.save_history(history_path);
     }
 
-    println!("👋 Goodbye!");
+    output.print("👋 Goodbye!");
     Ok(())
 }
 
-async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_code: bool) {
+async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_code: bool, output: &SimpleOutput) {
     // Show thinking indicator immediately
-    print!("🤔 Thinking...");
-    std::io::stdout().flush().unwrap();
+    output.print("🤔 Thinking...");
+    // Note: flush is handled internally by println
 
     // Create cancellation token for this request
     let cancellation_token = CancellationToken::new();
@@ -290,16 +296,16 @@ async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_co
         }
         _ = tokio::signal::ctrl_c() => {
             cancel_token_clone.cancel();
-            println!("\n⚠️  Operation cancelled by user (Ctrl+C)");
+            output.print("\n⚠️  Operation cancelled by user (Ctrl+C)");
             return;
         }
     };
 
     match execution_result {
-        Ok(response) => println!("{}", response),
+        Ok(response) => output.print_markdown(&response),
         Err(e) => {
             if e.to_string().contains("cancelled") {
-                println!("⚠️  Operation cancelled by user");
+                output.print("⚠️  Operation cancelled by user");
             } else {
                 error!("Error: {}", e);
             }
@@ -307,24 +313,9 @@ async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_co
     }
 }
 
-fn display_context_progress(agent: &Agent) {
+fn display_context_progress(agent: &Agent, output: &SimpleOutput) {
     let context = agent.get_context_window();
-    let percentage = context.percentage_used();
-
-    // Create a simple visual progress bar using the requested characters (10 dots max)
-    let bar_width = 10;
-    let filled_width = ((percentage / 100.0) * bar_width as f32) as usize;
-    let empty_width = bar_width - filled_width;
-
-    let filled_chars = "●".repeat(filled_width);
-    let empty_chars = "○".repeat(empty_width);
-    let progress_bar = format!("{}{}", filled_chars, empty_chars);
-
-    // Print context info with visual progress bar
-    println!(
-        "Context: {} {:.1}% | {}/{} tokens",
-        progress_bar, percentage, context.used_tokens, context.total_tokens
-    );
+    output.print_context(context.used_tokens, context.total_tokens, context.percentage_used());
 }
 
 /// Set up the workspace directory for autonomous mode
@@ -342,10 +333,11 @@ fn setup_workspace_directory() -> Result<PathBuf> {
     // Create the directory if it doesn't exist
     if !workspace_dir.exists() {
         std::fs::create_dir_all(&workspace_dir)?;
-        println!(
+        let output = SimpleOutput::new();
+        output.print(&format!(
             "📁 Created workspace directory: {}",
             workspace_dir.display()
-        );
+        ));
     }
 
     Ok(workspace_dir)
@@ -359,14 +351,16 @@ async fn run_autonomous(
     show_code: bool,
     max_turns: usize,
 ) -> Result<()> {
-    println!("🤖 G3 AI Coding Agent - Autonomous Mode");
-    println!("📁 Using workspace: {}", project.workspace().display());
+    let output = SimpleOutput::new();
+    
+    output.print("🤖 G3 AI Coding Agent - Autonomous Mode");
+    output.print(&format!("📁 Using workspace: {}", project.workspace().display()));
     
     // Check if requirements exist
     if !project.has_requirements() {
-        println!("❌ Error: requirements.md not found in workspace directory");
-        println!("   Please create a requirements.md file with your project requirements at:");
-        println!("   {}/requirements.md", project.workspace().display());
+        output.print("❌ Error: requirements.md not found in workspace directory");
+        output.print("   Please create a requirements.md file with your project requirements at:");
+        output.print(&format!("   {}/requirements.md", project.workspace().display()));
         return Ok(());
     }
 
@@ -374,20 +368,20 @@ async fn run_autonomous(
     let requirements = match project.read_requirements()? {
         Some(content) => content,
         None => {
-            println!("❌ Error: Could not read requirements.md");
+            output.print("❌ Error: Could not read requirements.md");
             return Ok(());
         }
     };
 
-    println!("📋 Requirements loaded from requirements.md");
-    println!("🔄 Starting coach-player feedback loop...");
+    output.print("📋 Requirements loaded from requirements.md");
+    output.print("🔄 Starting coach-player feedback loop...");
     
     let mut turn = 1;
     let mut coach_feedback = String::new();
     let mut implementation_approved = false;
 
     loop {
-        println!("\n=== TURN {}/{} - PLAYER MODE ===", turn, max_turns);
+        output.print(&format!("\n=== TURN {}/{} - PLAYER MODE ===", turn, max_turns));
 
         // Player mode: implement requirements (with coach feedback if available)
         let player_prompt = if coach_feedback.is_empty() {
@@ -402,13 +396,13 @@ async fn run_autonomous(
             )
         };
 
-        println!("🎯 Starting player implementation...");
+        output.print("🎯 Starting player implementation...");
         let player_result = agent
             .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
             .await;
 
         if let Err(e) = player_result {
-            println!("❌ Player implementation failed: {}", e);
+            output.print(&format!("❌ Player implementation failed: {}", e));
         }
 
         // Create a new agent instance for coach mode to ensure fresh context
@@ -418,7 +412,7 @@ async fn run_autonomous(
         // Ensure coach agent is also in the workspace directory
         project.enter_workspace()?;
 
-        println!("\n=== TURN {}/{} - COACH MODE ===", turn, max_turns);
+        output.print(&format!("\n=== TURN {}/{} - COACH MODE ===", turn, max_turns));
 
         // Coach mode: critique the implementation
         let coach_prompt = format!(
@@ -442,26 +436,26 @@ Keep your response concise and focused on actionable items.",
             requirements
         );
 
-        println!("🎓 Starting coach review...");
+        output.print("🎓 Starting coach review...");
         let coach_result = coach_agent
             .execute_task_with_timing(&coach_prompt, None, false, show_prompt, show_code, true)
             .await?;
 
-        println!("🎓 Coach review completed");
-        println!("Coach feedback: {}", coach_result);
+        output.print("🎓 Coach review completed");
+        output.print(&format!("Coach feedback: {}", coach_result));
 
         // Check if coach approved the implementation
         if coach_result.contains("IMPLEMENTATION_APPROVED") {
-            println!("\n=== SESSION COMPLETED - IMPLEMENTATION APPROVED ===");
-            println!("✅ Coach approved the implementation!");
+            output.print("\n=== SESSION COMPLETED - IMPLEMENTATION APPROVED ===");
+            output.print("✅ Coach approved the implementation!");
             implementation_approved = true;
             break;
         }
 
         // Check if we've reached max turns
         if turn >= max_turns {
-            println!("\n=== SESSION COMPLETED - MAX TURNS REACHED ===");
-            println!("⏰ Maximum turns ({}) reached", max_turns);
+            output.print("\n=== SESSION COMPLETED - MAX TURNS REACHED ===");
+            output.print(&format!("⏰ Maximum turns ({}) reached", max_turns));
             break;
         }
 
@@ -469,13 +463,13 @@ Keep your response concise and focused on actionable items.",
         coach_feedback = coach_result;
         turn += 1;
 
-        println!("🔄 Coach provided feedback for next iteration");
+        output.print("🔄 Coach provided feedback for next iteration");
     }
 
     if implementation_approved {
-        println!("\n🎉 Autonomous mode completed successfully");
+        output.print("\n🎉 Autonomous mode completed successfully");
     } else {
-        println!("\n🔄 Autonomous mode completed (max iterations)");
+        output.print("\n🔄 Autonomous mode completed (max iterations)");
     }
 
     Ok(())
