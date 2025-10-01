@@ -1276,36 +1276,39 @@ The tool will execute immediately and you'll receive the result (success or erro
                             // Execute the tool with formatted output
                             println!(); // New line before tool execution
 
-                            // Tool call header
-                            println!("┌─ {}", tool_call.tool);
-                            if let Some(args_obj) = tool_call.args.as_object() {
-                                for (key, value) in args_obj {
-                                    let value_str = match value {
-                                        serde_json::Value::String(s) => {
-                                            if tool_call.tool == "shell" && key == "command" {
-                                                if let Some(first_line) = s.lines().next() {
-                                                    if s.lines().count() > 1 {
-                                                        format!("{}...", first_line)
+                            // Skip printing tool call details for final_output
+                            if tool_call.tool != "final_output" {
+                                // Tool call header
+                                println!("┌─ {}", tool_call.tool);
+                                if let Some(args_obj) = tool_call.args.as_object() {
+                                    for (key, value) in args_obj {
+                                        let value_str = match value {
+                                            serde_json::Value::String(s) => {
+                                                if tool_call.tool == "shell" && key == "command" {
+                                                    if let Some(first_line) = s.lines().next() {
+                                                        if s.lines().count() > 1 {
+                                                            format!("{}...", first_line)
+                                                        } else {
+                                                            first_line.to_string()
+                                                        }
                                                     } else {
-                                                        first_line.to_string()
+                                                        s.clone()
                                                     }
                                                 } else {
-                                                    s.clone()
-                                                }
-                                            } else {
-                                                if s.len() > 100 {
-                                                    format!("{}...", &s[..100])
-                                                } else {
-                                                    s.clone()
+                                                    if s.len() > 100 {
+                                                        format!("{}...", &s[..100])
+                                                    } else {
+                                                        s.clone()
+                                                    }
                                                 }
                                             }
-                                        }
-                                        _ => value.to_string(),
-                                    };
-                                    println!("│ {}: {}", key, value_str);
+                                            _ => value.to_string(),
+                                        };
+                                        println!("│ {}: {}", key, value_str);
+                                    }
                                 }
+                                println!("├─ output:");
                             }
-                            println!("├─ output:");
 
                             let exec_start = Instant::now();
                             let tool_result = self.execute_tool(&tool_call).await?;
@@ -1321,23 +1324,25 @@ The tool will execute immediately and you'll receive the result (success or erro
                             ));
 
                             // Display tool execution result with proper indentation
-                            let output_lines: Vec<&str> = tool_result.lines().collect();
-                            const MAX_LINES: usize = 5;
+                            if tool_call.tool != "final_output" {
+                                let output_lines: Vec<&str> = tool_result.lines().collect();
+                                const MAX_LINES: usize = 5;
 
-                            if output_lines.len() <= MAX_LINES {
-                                for line in output_lines {
-                                    println!("│ {}", line);
+                                if output_lines.len() <= MAX_LINES {
+                                    for line in output_lines {
+                                        println!("│ {}", line);
+                                    }
+                                } else {
+                                    for line in output_lines.iter().take(MAX_LINES) {
+                                        println!("│ {}", line);
+                                    }
+                                    let hidden_count = output_lines.len() - MAX_LINES;
+                                    println!(
+                                        "│ ... ({} more line{} hidden)",
+                                        hidden_count,
+                                        if hidden_count == 1 { "" } else { "s" }
+                                    );
                                 }
-                            } else {
-                                for line in output_lines.iter().take(MAX_LINES) {
-                                    println!("│ {}", line);
-                                }
-                                let hidden_count = output_lines.len() - MAX_LINES;
-                                println!(
-                                    "│ ... ({} more line{} hidden)",
-                                    hidden_count,
-                                    if hidden_count == 1 { "" } else { "s" }
-                                );
                             }
 
                             // Check if this was a final_output tool call
@@ -1355,10 +1360,12 @@ The tool will execute immediately and you'll receive the result (success or erro
                             }
 
                             // Closure marker with timing
-                            println!("└─ ⚡️ {}", Self::format_duration(exec_duration));
-                            println!();
-                            print!("🤖 ");
-                            io::stdout().flush()?;
+                            if tool_call.tool != "final_output" {
+                                println!("└─ ⚡️ {}", Self::format_duration(exec_duration));
+                                println!();
+                                print!("🤖 ");
+                                io::stdout().flush()?;
+                            }
 
                             // Add the tool call and result to the context window
                             // Only include the text content if it's not already in full_response
