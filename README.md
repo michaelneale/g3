@@ -47,6 +47,15 @@ Command-line interface:
 - Configuration management commands
 - Session management
 
+### Error Handling & Resilience
+
+G3 includes robust error handling with automatic retry logic:
+- **Recoverable Error Detection**: Automatically identifies recoverable errors (rate limits, network issues, server errors, timeouts)
+- **Exponential Backoff with Jitter**: Implements intelligent retry delays to avoid overwhelming services
+- **Detailed Error Logging**: Captures comprehensive error context including stack traces, request/response data, and session information
+- **Error Persistence**: Saves detailed error logs to `logs/errors/` for post-mortem analysis
+- **Graceful Degradation**: Non-recoverable errors are logged with full context before terminating
+
 ## Key Features
 
 ### Intelligent Context Management

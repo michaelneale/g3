@@ -856,6 +856,7 @@ dependencies = [
  "g3-execution",
  "g3-providers",
  "llama_cpp",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

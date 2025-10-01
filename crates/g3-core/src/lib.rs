@@ -1,4 +1,8 @@
 pub mod project;
+pub mod error_handling;
+
+#[cfg(test)]
+mod error_handling_test;
 use anyhow::Result;
 use g3_config::Config;
 use g3_execution::CodeExecutor;
@@ -965,10 +969,51 @@ The tool will execute immediately and you'll receive the result (success or erro
         ]
     }
 
+    /// Helper method to stream with retry logic
+    async fn stream_with_retry(
+        &self,
+        request: &CompletionRequest,
+        error_context: &error_handling::ErrorContext,
+    ) -> Result<g3_providers::CompletionStream> {
+        use crate::error_handling::{classify_error, calculate_retry_delay, ErrorType};
+        
+        let mut attempt = 0;
+        const MAX_ATTEMPTS: u32 = 3;
+        
+        loop {
+            attempt += 1;
+            let provider = self.providers.get(None)?;
+            
+            match provider.stream(request.clone()).await {
+                Ok(stream) => {
+                    if attempt > 1 {
+                        info!("Stream started successfully after {} attempts", attempt);
+                    }
+                    return Ok(stream);
+                }
+                Err(e) if attempt < MAX_ATTEMPTS => {
+                    if matches!(classify_error(&e), ErrorType::Recoverable(_)) {
+                        let delay = calculate_retry_delay(attempt);
+                        warn!("Recoverable error on attempt {}/{}: {}. Retrying in {:?}...", attempt, MAX_ATTEMPTS, e, delay);
+                        tokio::time::sleep(delay).await;
+                    } else {
+                        error_context.clone().log_error(&e);
+                        return Err(e);
+                    }
+                }
+                Err(e) => {
+                    error_context.clone().log_error(&e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+
     async fn stream_completion_with_tools(
         &mut self,
         mut request: CompletionRequest,
     ) -> Result<(String, Duration)> {
+        use crate::error_handling::ErrorContext;
         use std::io::{self, Write};
         use tokio_stream::StreamExt;
 
@@ -1119,16 +1164,39 @@ The tool will execute immediately and you'll receive the result (success or erro
 
             let provider = self.providers.get(None)?;
             debug!("Got provider: {}", provider.name());
-            let mut stream = match provider.stream(request.clone()).await {
+            
+            // Create error context for detailed logging
+            let last_prompt = request.messages
+                .iter()
+                .rev()
+                .find(|m| matches!(m.role, MessageRole::User))
+                .map(|m| m.content.clone())
+                .unwrap_or_else(|| "No user message found".to_string());
+            
+            let error_context = ErrorContext::new(
+                "stream_completion".to_string(),
+                provider.name().to_string(),
+                provider.model().to_string(),
+                last_prompt,
+                self.session_id.clone(),
+                self.context_window.used_tokens,
+            ).with_request(
+                serde_json::to_string(&request).unwrap_or_else(|_| "Failed to serialize request".to_string())
+            );
+            
+            // Try to get stream with retry logic
+            let mut stream = match self.stream_with_retry(&request, &error_context).await {
                 Ok(s) => s,
                 Err(e) => {
+                    // Additional retry for "busy" errors on subsequent iterations
                     if iteration_count > 1 && e.to_string().contains("busy") {
                         warn!(
-                            "Model busy on iteration {}, retrying in 500ms",
+                            "Model busy on iteration {}, attempting one more retry in 500ms",
                             iteration_count
                         );
                         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                        match provider.stream(request.clone()).await {
+                        
+                        match self.stream_with_retry(&request, &error_context).await {
                             Ok(s) => s,
                             Err(e2) => {
                                 error!("Failed to start stream after retry: {}", e2);
