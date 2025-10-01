@@ -34,7 +34,7 @@ impl SimpleOutput {
         self.mad_skin.print_text(markdown);
     }
 
-    pub fn print_status(&self, status: &str) {
+    pub fn _print_status(&self, status: &str) {
         println!("📊 {}", status);
     }
 

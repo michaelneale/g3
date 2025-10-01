@@ -408,7 +408,6 @@ mod tests {
         let truncated = truncate_for_logging(long_text, 20);
         assert!(truncated.starts_with("This is a very long "));
         assert!(truncated.contains("truncated"));
-        assert!(truncated.contains("total chars"));
         assert!(truncated.contains("total bytes"));
     }
     

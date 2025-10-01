@@ -1,5 +1,5 @@
 use anyhow::Result;
-use g3_providers::{
+use crate::{
     CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, LLMProvider, Message,
     MessageRole, Usage,
 };

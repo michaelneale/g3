@@ -41,6 +41,7 @@
 //!         max_tokens: Some(1000),
 //!         temperature: Some(0.7),
 //!         stream: false,
+//!         tools: None,
 //!     };
 //!
 //!     // Get a completion
@@ -74,6 +75,7 @@
 //!         max_tokens: Some(1000),
 //!         temperature: Some(0.7),
 //!         stream: true,
+//!         tools: None,
 //!     };
 //!
 //!     let mut stream = provider.stream(request).await?;

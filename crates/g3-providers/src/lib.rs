@@ -85,10 +85,12 @@ pub struct Tool {
 
 pub mod anthropic;
 pub mod databricks;
+pub mod embedded;
 pub mod oauth;
 
 pub use anthropic::AnthropicProvider;
 pub use databricks::DatabricksProvider;
+pub use embedded::EmbeddedProvider;
 
 /// Provider registry for managing multiple LLM providers
 pub struct ProviderRegistry {

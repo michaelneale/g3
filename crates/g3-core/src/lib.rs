@@ -348,7 +348,7 @@ impl Agent {
         if let Some(embedded_config) = &config.providers.embedded {
             if config.providers.default_provider == "embedded" {
                 info!("Initializing embedded provider (selected as default)");
-                let embedded_provider = crate::providers::embedded::EmbeddedProvider::new(
+                let embedded_provider = g3_providers::EmbeddedProvider::new(
                     embedded_config.model_path.clone(),
                     embedded_config.model_type.clone(),
                     embedded_config.context_length,
@@ -736,12 +736,17 @@ The tool will execute immediately and you'll receive the result (success or erro
         // Update context window with estimated token usage
         self.context_window.update_usage(&mock_usage);
 
-        // Add assistant response to context window
-        let assistant_message = Message {
-            role: MessageRole::Assistant,
-            content: response_content.clone(),
-        };
-        self.context_window.add_message(assistant_message);
+        // Add assistant response to context window only if not empty
+        // This prevents the "Skipping empty message" warning when only tools were executed
+        if !response_content.trim().is_empty() {
+            let assistant_message = Message {
+                role: MessageRole::Assistant,
+                content: response_content.clone(),
+            };
+            self.context_window.add_message(assistant_message);
+        } else {
+            debug!("Assistant response was empty (likely only tool execution), skipping message addition");
+        }
 
         // Save context window at the end of successful interaction
         self.save_context_window("completed");
@@ -2448,10 +2453,6 @@ fn fix_mixed_quotes_in_json(json_str: &str) -> String {
     }
 
     result
-}
-
-pub mod providers {
-    pub mod embedded;
 }
 
 #[cfg(test)]
