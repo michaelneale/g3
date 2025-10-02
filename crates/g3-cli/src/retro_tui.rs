@@ -220,7 +220,13 @@ impl RetroTui {
             Self::draw_output_area(f, chunks[1], &state.output_history, state.scroll_offset);
 
             // Draw status bar
-            Self::draw_status_bar(f, chunks[2], &state.status_line, state.context_info, &state.provider_info);
+            Self::draw_status_bar(
+                f,
+                chunks[2],
+                &state.status_line,
+                state.context_info,
+                &state.provider_info,
+            );
         })?;
 
         Ok(())
@@ -344,10 +350,10 @@ impl RetroTui {
         let filled = ((percentage / 100.0) * bar_width as f32) as usize;
         let meter = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
 
-        let (provider, model) = provider_info;
+        let (_, model) = provider_info;
         let status_text = format!(
-            " STATUS: {} | CONTEXT: {} {:.1}% ({}/{}) | PROVIDER: {} | MODEL: {} ",
-            status_line, meter, percentage, used, total, provider, model
+            " STATUS: {} | CONTEXT: {} {:.1}% ({}/{}) | MODEL: {} ",
+            status_line, meter, percentage, used, total, model
         );
 
         let status = Paragraph::new(status_text)
