@@ -10,8 +10,10 @@ use tracing::{error, info};
 
 mod tui;
 mod ui_writer_impl;
+mod retro_tui;
 use tui::SimpleOutput;
-use ui_writer_impl::ConsoleUiWriter;
+use ui_writer_impl::{ConsoleUiWriter, RetroTuiWriter};
+use retro_tui::RetroTui;
 
 #[derive(Parser)]
 #[command(name = "g3")]
@@ -48,39 +50,60 @@ pub struct Cli {
     /// Maximum number of turns in autonomous mode (default: 5)
     #[arg(long, default_value = "5")]
     pub max_turns: usize,
+
+    /// Use retro terminal UI (inspired by 80s sci-fi)
+    #[arg(long)]
+    pub retro: bool,
 }
 
 pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging with filtering
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    // Only initialize logging if not in retro mode
+    if !cli.retro {
+        // Initialize logging with filtering
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-    // Create a filter that suppresses llama_cpp logs unless in verbose mode
-    let filter = if cli.verbose {
-        EnvFilter::from_default_env()
-            .add_directive(format!("{}=debug", env!("CARGO_PKG_NAME")).parse().unwrap())
-            .add_directive("g3_core=debug".parse().unwrap())
-            .add_directive("g3_cli=debug".parse().unwrap())
-            .add_directive("g3_execution=debug".parse().unwrap())
-            .add_directive("g3_providers=debug".parse().unwrap())
+        // Create a filter that suppresses llama_cpp logs unless in verbose mode
+        let filter = if cli.verbose {
+            EnvFilter::from_default_env()
+                .add_directive(format!("{}=debug", env!("CARGO_PKG_NAME")).parse().unwrap())
+                .add_directive("g3_core=debug".parse().unwrap())
+                .add_directive("g3_cli=debug".parse().unwrap())
+                .add_directive("g3_execution=debug".parse().unwrap())
+                .add_directive("g3_providers=debug".parse().unwrap())
+        } else {
+            EnvFilter::from_default_env()
+                .add_directive(format!("{}=info", env!("CARGO_PKG_NAME")).parse().unwrap())
+                .add_directive("g3_core=info".parse().unwrap())
+                .add_directive("g3_cli=info".parse().unwrap())
+                .add_directive("g3_execution=info".parse().unwrap())
+                .add_directive("g3_providers=info".parse().unwrap())
+                .add_directive("llama_cpp=off".parse().unwrap()) // Suppress all llama_cpp logs
+                .add_directive("llama=off".parse().unwrap()) // Suppress all llama.cpp logs
+        };
+
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer())
+            .with(filter)
+            .init();
     } else {
-        EnvFilter::from_default_env()
-            .add_directive(format!("{}=info", env!("CARGO_PKG_NAME")).parse().unwrap())
-            .add_directive("g3_core=info".parse().unwrap())
-            .add_directive("g3_cli=info".parse().unwrap())
-            .add_directive("g3_execution=info".parse().unwrap())
-            .add_directive("g3_providers=info".parse().unwrap())
-            .add_directive("llama_cpp=off".parse().unwrap()) // Suppress all llama_cpp logs
-            .add_directive("llama=off".parse().unwrap()) // Suppress all llama.cpp logs
-    };
+        // In retro mode, we don't want any logging output to interfere with the TUI
+        // We'll use a no-op subscriber
+        use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+        
+        // Create a filter that suppresses ALL logs in retro mode
+        let filter = EnvFilter::from_default_env()
+            .add_directive("off".parse().unwrap()); // Turn off all logging
+        
+        tracing_subscriber::registry()
+            .with(filter)
+            .init();
+    }
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(filter)
-        .init();
-
-    info!("Starting G3 AI Coding Agent");
+    if !cli.retro {
+        info!("Starting G3 AI Coding Agent");
+    }
 
     // Set up workspace directory
     let workspace_dir = if let Some(ws) = cli.workspace {
@@ -104,19 +127,23 @@ pub async fn run() -> Result<()> {
     project.ensure_workspace_exists()?;
     project.enter_workspace()?;
 
-    info!("Using workspace: {}", project.workspace().display());
+    if !cli.retro {
+        info!("Using workspace: {}", project.workspace().display());
+    }
 
     // Load configuration
     let config = Config::load(cli.config.as_deref())?;
 
     // Initialize agent
     let ui_writer = ConsoleUiWriter::new();
-    let mut agent = Agent::new(config, ui_writer).await?;
+    let mut agent = Agent::new(config.clone(), ui_writer).await?;
 
     // Execute task, autonomous mode, or start interactive mode
     if cli.autonomous {
         // Autonomous mode with coach-player feedback loop
-        info!("Starting autonomous mode");
+        if !cli.retro {
+            info!("Starting autonomous mode");
+        }
         run_autonomous(
             agent,
             project,
@@ -127,20 +154,184 @@ pub async fn run() -> Result<()> {
         .await?;
     } else if let Some(task) = cli.task {
         // Single-shot mode
-        info!("Executing task: {}", task);
+        if !cli.retro {
+            info!("Executing task: {}", task);
+        }
         let output = SimpleOutput::new();
         let result = agent
             .execute_task_with_timing(&task, None, false, cli.show_prompt, cli.show_code, true)
             .await?;
         output.print_markdown(&result);
     } else {
-        let output = SimpleOutput::new();
         // Interactive mode (default)
-        info!("Starting interactive mode");
-        output.print(&format!("📁 Workspace: {}", project.workspace().display()));
-        run_interactive(agent, cli.show_prompt, cli.show_code).await?;
+        if !cli.retro {
+            info!("Starting interactive mode");
+        }
+        
+        if cli.retro {
+            // Use retro terminal UI
+            run_interactive_retro(config, cli.show_prompt, cli.show_code).await?;
+        } else {
+            // Use standard terminal UI
+            let output = SimpleOutput::new();
+            output.print(&format!("📁 Workspace: {}", project.workspace().display()));
+            run_interactive(agent, cli.show_prompt, cli.show_code).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: bool) -> Result<()> {
+    use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+    use std::time::Duration;
+    
+    // Set environment variable to suppress println in other crates
+    std::env::set_var("G3_RETRO_MODE", "1");
+    
+    // Initialize the retro terminal UI
+    let tui = RetroTui::start().await?;
+    
+    // Create agent with RetroTuiWriter
+    let ui_writer = RetroTuiWriter::new(tui.clone());
+    let mut agent = Agent::new(config, ui_writer).await?;
+    
+    // Display initial system messages
+    tui.output("SYSTEM: G3 AI CODING AGENT ONLINE");
+    tui.output("SYSTEM: READY FOR INPUT");
+    tui.output("");
+    
+    // Display provider and model information
+    match agent.get_provider_info() {
+        Ok((provider, model)) => {
+            tui.output(&format!("SYSTEM: PROVIDER: {} | MODEL: {}", provider, model));
+        }
+        Err(e) => {
+            tui.error(&format!("Failed to get provider info: {}", e));
+        }
+    }
+    
+    tui.output("");
+    tui.output("Type 'exit' or 'quit' to exit, use Up/Down arrows to scroll output");
+    tui.output("For multiline input: use \\ at the end of a line to continue");
+    tui.output("");
+    
+    // Track multiline input
+    let mut multiline_buffer = String::new();
+    let mut in_multiline = false;
+    let mut input_buffer = String::new();
+    
+    // Main event loop
+    loop {
+        // Update context window display
+        let context = agent.get_context_window();
+        tui.update_context(context.used_tokens, context.total_tokens, context.percentage_used());
+        
+        // Update the displayed input buffer
+        tui.update_input(&input_buffer);
+        
+        // Poll for keyboard events
+        if event::poll(Duration::from_millis(50))? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        tui.exit();
+                        break;
+                    }
+                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        tui.exit();
+                        break;
+                    }
+                    KeyCode::Enter => {
+                        if !input_buffer.is_empty() {
+                            let trimmed = input_buffer.trim_end();
+                            
+                            // Check if line ends with backslash for continuation
+                            if trimmed.ends_with('\\') {
+                                // Remove the backslash and add to buffer
+                                let without_backslash = &trimmed[..trimmed.len() - 1];
+                                multiline_buffer.push_str(without_backslash);
+                                multiline_buffer.push('\n');
+                                in_multiline = true;
+                                input_buffer.clear();
+                                tui.status("MULTILINE INPUT");
+                                continue;
+                            }
+                            
+                            // If we're in multiline mode and no backslash, this is the final line
+                            let final_input = if in_multiline {
+                                multiline_buffer.push_str(&input_buffer);
+                                in_multiline = false;
+                                let result = multiline_buffer.clone();
+                                multiline_buffer.clear();
+                                tui.status("READY");
+                                result
+                            } else {
+                                input_buffer.clone()
+                            };
+                            
+                            input_buffer.clear();
+                            
+                            let input = final_input.trim().to_string();
+                            if input.is_empty() {
+                                continue;
+                            }
+                            
+                            if input == "exit" || input == "quit" {
+                                tui.exit();
+                                break;
+                            }
+                            
+                            // Execute the task
+                            tui.output(&format!("> {}", input));
+                            tui.status("PROCESSING");
+                            
+                            match agent.execute_task_with_timing(&input, None, false, show_prompt, show_code, true).await {
+                                Ok(response) => {
+                                    tui.output(&response);
+                                    tui.status("READY");
+                                }
+                                Err(e) => {
+                                    tui.error(&format!("Task execution failed: {}", e));
+                                    tui.status("ERROR");
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        input_buffer.push(c);
+                    }
+                    KeyCode::Backspace => {
+                        input_buffer.pop();
+                    }
+                    KeyCode::Up => {
+                        tui.scroll_up();
+                    }
+                    KeyCode::Down => {
+                        tui.scroll_down();
+                    }
+                    KeyCode::PageUp => {
+                        tui.scroll_page_up();
+                    }
+                    KeyCode::PageDown => {
+                        tui.scroll_page_down();
+                    }
+                    KeyCode::Home => {
+                        tui.scroll_home();
+                    }
+                    KeyCode::End => {
+                        tui.scroll_end();
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
+        // Small delay to prevent CPU spinning
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    
+    tui.output("SYSTEM: SHUTDOWN INITIATED");
     Ok(())
 }
 

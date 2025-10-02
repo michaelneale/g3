@@ -1,5 +1,6 @@
 use g3_core::ui_writer::UiWriter;
 use std::io::{self, Write};
+use crate::retro_tui::RetroTui;
 
 /// Console implementation of UiWriter that prints to stdout
 pub struct ConsoleUiWriter;
@@ -77,5 +78,86 @@ impl UiWriter for ConsoleUiWriter {
     
     fn flush(&self) {
         let _ = io::stdout().flush();
+    }
+}
+
+/// RetroTui implementation of UiWriter that sends output to the TUI
+pub struct RetroTuiWriter {
+    tui: RetroTui,
+}
+
+impl RetroTuiWriter {
+    pub fn new(tui: RetroTui) -> Self {
+        Self { tui }
+    }
+}
+
+impl UiWriter for RetroTuiWriter {
+    fn print(&self, message: &str) {
+        self.tui.output(message);
+    }
+    
+    fn println(&self, message: &str) {
+        self.tui.output(message);
+    }
+    
+    fn print_inline(&self, message: &str) {
+        // For inline printing, we'll just append to the output
+        self.tui.output(message);
+    }
+    
+    fn print_system_prompt(&self, prompt: &str) {
+        self.tui.output("🔍 System Prompt:");
+        self.tui.output("================");
+        for line in prompt.lines() {
+            self.tui.output(line);
+        }
+        self.tui.output("================");
+        self.tui.output("");
+    }
+    
+    fn print_context_status(&self, message: &str) {
+        self.tui.output(message);
+    }
+    
+    fn print_tool_header(&self, tool_name: &str) {
+        self.tui.output(&format!("┌─ {}", tool_name));
+    }
+    
+    fn print_tool_arg(&self, key: &str, value: &str) {
+        self.tui.output(&format!("│ {}: {}", key, value));
+    }
+    
+    fn print_tool_output_header(&self) {
+        self.tui.output("├─ output:");
+    }
+    
+    fn print_tool_output_line(&self, line: &str) {
+        self.tui.output(&format!("│ {}", line));
+    }
+    
+    fn print_tool_output_summary(&self, hidden_count: usize) {
+        self.tui.output(&format!(
+            "│ ... ({} more line{} hidden)",
+            hidden_count,
+            if hidden_count == 1 { "" } else { "s" }
+        ));
+    }
+    
+    fn print_tool_timing(&self, duration_str: &str) {
+        self.tui.output(&format!("└─ ⚡️ {}", duration_str));
+        self.tui.output("");
+    }
+    
+    fn print_agent_prompt(&self) {
+        self.tui.output("🤖 ");
+    }
+    
+    fn print_agent_response(&self, content: &str) {
+        self.tui.output(content);
+    }
+    
+    fn flush(&self) {
+        // No-op for TUI since it handles its own rendering
     }
 }

@@ -320,7 +320,9 @@ impl OAuthFlow {
 
         // Open the browser which will redirect with the code to the server
         let authorization_url = self.get_authorization_url();
-        println!("🔐 Opening browser for Databricks authentication...");
+        if std::env::var("G3_RETRO_MODE").is_err() {
+            println!("🔐 Opening browser for Databricks authentication...");
+        }
         if webbrowser::open(&authorization_url).is_err() {
             println!(
                 "Please open this URL in your browser:\n{}",
@@ -339,7 +341,9 @@ impl OAuthFlow {
         // Stop the server
         server_handle.abort();
 
-        println!("✅ Authentication successful! Exchanging code for token...");
+        if std::env::var("G3_RETRO_MODE").is_err() {
+            println!("✅ Authentication successful! Exchanging code for token...");
+        }
 
         // Exchange the code for a token
         self.exchange_code_for_token(&code).await
@@ -422,7 +426,9 @@ pub async fn get_oauth_token_async(
 
     // Cache and return
     token_cache.save_token(&token)?;
-    println!("🎉 Databricks authentication complete!");
+    if std::env::var("G3_RETRO_MODE").is_err() {
+        println!("🎉 Databricks authentication complete!");
+    }
     Ok(token.access_token)
 }
 
