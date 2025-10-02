@@ -59,6 +59,10 @@ struct TerminalState {
     context_info: (u32, u32, f32),
     /// Provider and model info
     provider_info: (String, String),
+    /// Status blink state (for PROCESSING)
+    status_blink: bool,
+    /// Last status blink time
+    last_status_blink: Instant,
     /// Should exit
     should_exit: bool,
 }
@@ -81,6 +85,8 @@ impl TerminalState {
             status_line: "READY".to_string(),
             context_info: (0, 0, 0.0),
             provider_info: ("UNKNOWN".to_string(), "UNKNOWN".to_string()),
+            status_blink: true,
+            last_status_blink: Instant::now(),
             should_exit: false,
         }
     }
@@ -168,6 +174,14 @@ impl RetroTui {
                         state.cursor_blink = !state.cursor_blink;
                         state.last_blink = Instant::now();
                     }
+                    
+                    // Update status blink only if status is "PROCESSING"
+                    if state.status_line == "PROCESSING" {
+                        if state.last_status_blink.elapsed() > Duration::from_millis(500) {
+                            state.status_blink = !state.status_blink;
+                            state.last_status_blink = Instant::now();
+                        }
+                    }
                 }
 
                 // Redraw at ~60fps
@@ -228,6 +242,7 @@ impl RetroTui {
                 &state.status_line,
                 state.context_info,
                 &state.provider_info,
+                state.status_blink,
             );
         })?;
 
@@ -350,6 +365,7 @@ impl RetroTui {
         status_line: &str,
         context_info: (u32, u32, f32),
         provider_info: &(String, String),
+        status_blink: bool,
     ) {
         let (used, total, percentage) = context_info;
 
@@ -361,13 +377,18 @@ impl RetroTui {
         let (_, model) = provider_info;
 
         // Determine status color based on status text
-        let status_color = if status_line == "READY" {
-            TERMINAL_PALE_BLUE
-        } else if status_line == "PROCESSING" {
-            TERMINAL_DARK_AMBER
+        let (status_color, status_text) = if status_line == "PROCESSING" {
+            // Blink the PROCESSING status
+            if status_blink {
+                (TERMINAL_DARK_AMBER, status_line)
+            } else {
+                (TERMINAL_BG, "         ") // Hide text by matching background
+            }
+        } else if status_line == "READY" {
+            (TERMINAL_PALE_BLUE, status_line)
         } else {
             // Default to amber for other statuses
-            TERMINAL_AMBER
+            (TERMINAL_AMBER, status_line)
         };
 
         // Build the status line with different colored spans
@@ -379,7 +400,7 @@ impl RetroTui {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                status_line,
+                status_text,
                 Style::default()
                     .fg(status_color)
                     .add_modifier(Modifier::BOLD),
