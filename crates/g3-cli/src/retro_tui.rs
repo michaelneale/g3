@@ -31,6 +31,7 @@ const TERMINAL_DARK_AMBER: Color = Color::Rgb(204, 119, 34); // Dark amber for P
 #[derive(Debug, Clone)]
 pub enum TuiMessage {
     AgentOutput(String),
+    ToolOutput { name: String, content: String },
     SystemStatus(String),
     ContextUpdate {
         used: u32,
@@ -91,6 +92,64 @@ impl TerminalState {
         }
     }
 
+    /// Format tool call output with a box
+    fn format_tool_output(&mut self, tool_name: &str, content: &str) {
+        // Calculate box width (use a reasonable width, accounting for terminal size)
+        let box_width = 80;
+        let border_char = "─";
+        let corner_tl = "┌";
+        let corner_tr = "┐";
+        let corner_bl = "└";
+        let corner_br = "┘";
+        let vertical = "│";
+        
+        // Add top border
+        self.output_history.push(format!(
+            "{}{}{}",
+            corner_tl,
+            border_char.repeat(box_width - 2),
+            corner_tr
+        ));
+        
+        // Add header with tool name (will be styled with green background in draw)
+        let header_text = format!(" {} ", tool_name.to_uppercase());
+        let padding = box_width - 2 - header_text.len();
+        self.output_history.push(format!(
+            "{}[TOOL_HEADER]{}{}{}",
+            vertical,
+            header_text,
+            " ".repeat(padding),
+            vertical
+        ));
+        
+        // Add separator between header and content
+        self.output_history.push(format!(
+            "{}{}{}",
+            "├",
+            border_char.repeat(box_width - 2),
+            "┤"
+        ));
+        
+        // Add content lines
+        for line in content.lines() {
+            // Wrap long lines if needed
+            let max_content_width = box_width - 4; // Account for borders and padding
+            if line.len() <= max_content_width {
+                self.output_history.push(format!("{} {:<width$} {}", vertical, line, vertical, width = max_content_width));
+            } else {
+                // Simple word wrapping for long lines
+                for chunk in line.chars().collect::<Vec<_>>().chunks(max_content_width) {
+                    let chunk_str: String = chunk.iter().collect();
+                    self.output_history.push(format!("{} {:<width$} {}", vertical, chunk_str, vertical, width = max_content_width));
+                }
+            }
+        }
+        
+        // Add bottom border
+        self.output_history.push(format!("{}{}{}", corner_bl, border_char.repeat(box_width - 2), corner_br));
+        self.output_history.push(String::new()); // Empty line after box
+    }
+
     /// Add text to output history
     fn add_output(&mut self, text: &str) {
         // Split text by newlines and add each line
@@ -141,6 +200,9 @@ impl RetroTui {
                     match msg {
                         TuiMessage::AgentOutput(text) => {
                             state.add_output(&text);
+                        }
+                        TuiMessage::ToolOutput { name, content } => {
+                            state.format_tool_output(&name, &content);
                         }
                         TuiMessage::SystemStatus(status) => {
                             state.status_line = status;
@@ -293,6 +355,24 @@ impl RetroTui {
             .skip(scroll)
             .take(visible_height)
             .map(|line| {
+                // Check if this is a tool header line
+                if line.contains("[TOOL_HEADER]") {
+                    // Extract the actual header text
+                    let cleaned = line.replace("[TOOL_HEADER]", "");
+                    // Style with green background and black text
+                    return Line::from(Span::styled(
+                        format!(" {}", cleaned),
+                        Style::default()
+                            .bg(TERMINAL_GREEN)
+                            .fg(Color::Black)
+                            .add_modifier(Modifier::BOLD),
+                    ));
+                }
+                
+                // Check if this is a box border line
+                if line.starts_with("┌") || line.starts_with("└") || line.starts_with("│") || line.starts_with("├") {
+                    return Line::from(Span::styled(format!(" {}", line), Style::default().fg(TERMINAL_DIM_GREEN)));
+                }
                 // Apply different colors based on content
                 let style = if line.starts_with("ERROR:") {
                     Style::default()
@@ -443,6 +523,11 @@ impl RetroTui {
     /// Send output to the terminal
     pub fn output(&self, text: &str) {
         let _ = self.tx.send(TuiMessage::AgentOutput(text.to_string()));
+    }
+
+    /// Send tool output to the terminal
+    pub fn tool_output(&self, name: &str, content: &str) {
+        let _ = self.tx.send(TuiMessage::ToolOutput { name: name.to_string(), content: content.to_string() });
     }
 
     /// Update system status

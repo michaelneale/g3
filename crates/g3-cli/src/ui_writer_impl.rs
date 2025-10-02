@@ -1,6 +1,7 @@
 use crate::retro_tui::RetroTui;
 use g3_core::ui_writer::UiWriter;
 use std::io::{self, Write};
+use std::sync::Mutex;
 
 /// Console implementation of UiWriter that prints to stdout
 pub struct ConsoleUiWriter;
@@ -84,11 +85,13 @@ impl UiWriter for ConsoleUiWriter {
 /// RetroTui implementation of UiWriter that sends output to the TUI
 pub struct RetroTuiWriter {
     tui: RetroTui,
+    current_tool_name: Mutex<Option<String>>,
+    current_tool_output: Mutex<Vec<String>>,
 }
 
 impl RetroTuiWriter {
     pub fn new(tui: RetroTui) -> Self {
-        Self { tui }
+        Self { tui, current_tool_name: Mutex::new(None), current_tool_output: Mutex::new(Vec::new()) }
     }
 }
 
@@ -121,32 +124,45 @@ impl UiWriter for RetroTuiWriter {
     }
 
     fn print_tool_header(&self, tool_name: &str) {
-        self.tui.output(&format!("┌─ {}", tool_name));
+        // Start collecting tool output
+        *self.current_tool_name.lock().unwrap() = Some(tool_name.to_string());
+        self.current_tool_output.lock().unwrap().clear();
+        self.current_tool_output.lock().unwrap().push(format!("Tool: {}", tool_name));
     }
 
     fn print_tool_arg(&self, key: &str, value: &str) {
-        self.tui.output(&format!("│ {}: {}", key, value));
+        self.current_tool_output.lock().unwrap().push(format!("{}: {}", key, value));
     }
 
     fn print_tool_output_header(&self) {
-        self.tui.output("├─ output:");
+        self.current_tool_output.lock().unwrap().push(String::new());
+        self.current_tool_output.lock().unwrap().push("Output:".to_string());
     }
 
     fn print_tool_output_line(&self, line: &str) {
-        self.tui.output(&format!("│ {}", line));
+        self.current_tool_output.lock().unwrap().push(line.to_string());
     }
 
     fn print_tool_output_summary(&self, hidden_count: usize) {
-        self.tui.output(&format!(
-            "│ ... ({} more line{} hidden)",
+        self.current_tool_output.lock().unwrap().push(format!(
+            "... ({} more line{} hidden)",
             hidden_count,
             if hidden_count == 1 { "" } else { "s" }
         ));
     }
 
     fn print_tool_timing(&self, duration_str: &str) {
-        self.tui.output(&format!("└─ ⚡️ {}", duration_str));
-        self.tui.output("");
+        self.current_tool_output.lock().unwrap().push(format!("⚡️ {}", duration_str));
+        
+        // Now send the complete tool output as a box
+        if let Some(tool_name) = self.current_tool_name.lock().unwrap().as_ref() {
+            let content = self.current_tool_output.lock().unwrap().join("\n");
+            self.tui.tool_output(tool_name, &content);
+        }
+        
+        // Clear the buffers
+        *self.current_tool_name.lock().unwrap() = None;
+        self.current_tool_output.lock().unwrap().clear();
     }
 
     fn print_agent_prompt(&self) {
