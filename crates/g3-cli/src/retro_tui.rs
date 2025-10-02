@@ -292,11 +292,17 @@ impl RetroTui {
                     Style::default()
                         .fg(TERMINAL_AMBER)
                         .add_modifier(Modifier::BOLD)
+                } else if line.starts_with("SYSTEM INITIALIZED")
+                    || line.starts_with("AWAITING COMMAND")
+                {
+                    Style::default()
+                        .fg(TERMINAL_DIM_GREEN)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(TERMINAL_GREEN)
                 };
 
-                Line::from(Span::styled(line.clone(), style))
+                Line::from(Span::styled(format!(" {}", line), style))
             })
             .collect();
 
