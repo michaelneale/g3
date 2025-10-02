@@ -204,10 +204,10 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
     // Display provider and model information
     match agent.get_provider_info() {
         Ok((provider, model)) => {
-            tui.output(&format!("SYSTEM: PROVIDER: {} | MODEL: {}", provider, model));
+            tui.update_provider_info(&provider, &model);
         }
         Err(e) => {
-            tui.error(&format!("Failed to get provider info: {}", e));
+            tui.update_provider_info("ERROR", &e.to_string());
         }
     }
     

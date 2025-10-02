@@ -55,6 +55,8 @@ struct TerminalState {
     status_line: String,
     /// Context window info
     context_info: (u32, u32, f32),
+    /// Provider and model info
+    provider_info: (String, String),
     /// Should exit
     should_exit: bool,
 }
@@ -76,6 +78,7 @@ impl TerminalState {
             last_blink: Instant::now(),
             status_line: "READY".to_string(),
             context_info: (0, 0, 0.0),
+            provider_info: ("UNKNOWN".to_string(), "UNKNOWN".to_string()),
             should_exit: false,
         }
     }
@@ -217,7 +220,7 @@ impl RetroTui {
             Self::draw_output_area(f, chunks[1], &state.output_history, state.scroll_offset);
 
             // Draw status bar
-            Self::draw_status_bar(f, chunks[2], &state.status_line, state.context_info);
+            Self::draw_status_bar(f, chunks[2], &state.status_line, state.context_info, &state.provider_info);
         })?;
 
         Ok(())
@@ -332,6 +335,7 @@ impl RetroTui {
         area: Rect,
         status_line: &str,
         context_info: (u32, u32, f32),
+        provider_info: &(String, String),
     ) {
         let (used, total, percentage) = context_info;
 
@@ -340,9 +344,10 @@ impl RetroTui {
         let filled = ((percentage / 100.0) * bar_width as f32) as usize;
         let meter = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
 
+        let (provider, model) = provider_info;
         let status_text = format!(
-            " STATUS: {} | CONTEXT: {} {:.1}% ({}/{} tokens) | ↑↓ SCROLL | CTRL-C EXIT ",
-            status_line, meter, percentage, used, total
+            " STATUS: {} | CONTEXT: {} {:.1}% ({}/{}) | PROVIDER: {} | MODEL: {} ",
+            status_line, meter, percentage, used, total, provider, model
         );
 
         let status = Paragraph::new(status_text)
@@ -374,6 +379,13 @@ impl RetroTui {
             total,
             percentage,
         });
+    }
+
+    /// Update provider and model info
+    pub fn update_provider_info(&self, provider: &str, model: &str) {
+        if let Ok(mut state) = self.state.lock() {
+            state.provider_info = (provider.to_string(), model.to_string());
+        }
     }
 
     /// Send error message
