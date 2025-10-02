@@ -1,11 +1,18 @@
 next tasks
 
-- get something working with autonomous mode
+x get something working with autonomous mode
 - g3d
+x ui abstraction from core
 - context token counting bug
+- embedded model
+  - prompt rewriting
+  - generates status messages "ruffling feathers..."
+  - project description?
+- treesitter + friends
 - error where it just gives up turn
 - "project" behaviors (read readme first)
-- ui 
-  - git 
+- advance project mgmt
+  - git for reverting
   - swarm
+  - ui tests / computer controller
 

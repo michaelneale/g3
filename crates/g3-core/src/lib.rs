@@ -1,5 +1,7 @@
 pub mod error_handling;
 pub mod project;
+pub mod ui_writer;
+use crate::ui_writer::UiWriter;
 
 #[cfg(test)]
 mod error_handling_test;
@@ -331,15 +333,16 @@ Format this as a detailed but concise summary that can be used to resume the con
     }
 }
 
-pub struct Agent {
+pub struct Agent<W: UiWriter> {
     providers: ProviderRegistry,
     context_window: ContextWindow,
     session_id: Option<String>,
     tool_call_metrics: Vec<(String, Duration, bool)>, // (tool_name, duration, success)
+    ui_writer: W,
 }
 
-impl Agent {
-    pub async fn new(config: Config) -> Result<Self> {
+impl<W: UiWriter> Agent<W> {
+    pub async fn new(config: Config, ui_writer: W) -> Result<Self> {
         let mut providers = ProviderRegistry::new();
 
         // Only register providers that are configured AND selected as the default provider
@@ -428,6 +431,7 @@ impl Agent {
             context_window,
             session_id: None,
             tool_call_metrics: Vec::new(),
+            ui_writer,
         })
     }
 
@@ -630,7 +634,7 @@ The tool will execute immediately and you'll receive the result (success or erro
 
 - **str_replace**: Replace text in a file using a diff
   - Format: {\"tool\": \"str_replace\", \"args\": {\"file_path\": \"path/to/file\", \"diff\": \"--- old\\n-old text\\n+++ new\\n+new text\"}}
-  - Example: {\"tool\": \"str_replace\", \"args\": {\"file_path\": \"src/main.rs\", \"diff\": \"--- old\\n-println!(\\\"old\\\");\\n+++ new\\n+println!(\\\"new\\\");\"}}
+  - Example: {\"tool\": \"str_replace\", \"args\": {\"file_path\": \"src/main.rs\", \"diff\": \"--- old\\n-old_code();\\n+++ new\\n+new_code();\"}}
 
 - **final_output**: Signal task completion with a detailed summary of work done in markdown format
   - Format: {\"tool\": \"final_output\", \"args\": {\"summary\": \"what_was_accomplished\"}}
@@ -651,11 +655,7 @@ The tool will execute immediately and you'll receive the result (success or erro
             };
 
             if show_prompt {
-                println!("🔍 System Prompt:");
-                println!("================");
-                println!("{}", system_prompt);
-                println!("================");
-                println!();
+                self.ui_writer.print_system_prompt(&system_prompt);
             }
 
             // Add system message to context window
@@ -1029,7 +1029,6 @@ The tool will execute immediately and you'll receive the result (success or erro
         mut request: CompletionRequest,
     ) -> Result<(String, Duration)> {
         use crate::error_handling::ErrorContext;
-        use std::io::{self, Write};
         use tokio_stream::StreamExt;
 
         debug!("Starting stream_completion_with_tools");
@@ -1052,10 +1051,10 @@ The tool will execute immediately and you'll receive the result (success or erro
             );
 
             // Notify user about summarization
-            println!(
+            self.ui_writer.print_context_status(&format!(
                 "\n📊 Context window reaching capacity ({}%). Creating summary...",
                 self.context_window.percentage_used() as u32
-            );
+            ));
 
             // Create summary request with FULL history
             let summary_prompt = self.context_window.create_summary_prompt();
@@ -1135,7 +1134,7 @@ The tool will execute immediately and you'll receive the result (success or erro
             // Get the summary
             match provider.complete(summary_request).await {
                 Ok(summary_response) => {
-                    println!("✅ Summary created successfully. Resetting context window...\n");
+                    self.ui_writer.print_context_status("✅ Summary created successfully. Resetting context window...\n");
 
                     // Extract the latest user message from the request
                     let latest_user_msg = request
@@ -1152,11 +1151,11 @@ The tool will execute immediately and you'll receive the result (success or erro
                     // Update the request with new context
                     request.messages = self.context_window.conversation_history.clone();
 
-                    println!("🔄 Context reset complete. Continuing with your request...\n");
+                    self.ui_writer.print_context_status("🔄 Context reset complete. Continuing with your request...\n");
                 }
                 Err(e) => {
                     error!("Failed to create summary: {}", e);
-                    println!("⚠️ Unable to create summary. Consider starting a new session if you continue to see errors.\n");
+                    self.ui_writer.print_context_status("⚠️ Unable to create summary. Consider starting a new session if you continue to see errors.\n");
                     // Don't continue with the original request if summarization failed
                     // as we're likely at token limit
                     return Err(anyhow::anyhow!("Context window at capacity and summarization failed. Please start a new session."));
@@ -1318,20 +1317,20 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             if !new_content.trim().is_empty() {
                                 if !response_started {
-                                    print!("\r🤖 ");
+                                    self.ui_writer.print_agent_prompt();
                                     response_started = true;
                                 }
-                                print!("{}", new_content);
-                                io::stdout().flush()?;
+                                self.ui_writer.print_agent_response(&new_content);
+                                self.ui_writer.flush();
                             }
 
                             // Execute the tool with formatted output
-                            println!(); // New line before tool execution
+                            self.ui_writer.println(""); // New line before tool execution
 
                             // Skip printing tool call details for final_output
                             if tool_call.tool != "final_output" {
                                 // Tool call header
-                                println!("┌─ {}", tool_call.tool);
+                                self.ui_writer.print_tool_header(&tool_call.tool);
                                 if let Some(args_obj) = tool_call.args.as_object() {
                                     for (key, value) in args_obj {
                                         let value_str = match value {
@@ -1356,10 +1355,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                                             }
                                             _ => value.to_string(),
                                         };
-                                        println!("│ {}: {}", key, value_str);
+                                        self.ui_writer.print_tool_arg(key, &value_str);
                                     }
                                 }
-                                println!("├─ output:");
+                                self.ui_writer.print_tool_output_header();
                             }
 
                             let exec_start = Instant::now();
@@ -1382,18 +1381,14 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                                 if output_lines.len() <= MAX_LINES {
                                     for line in output_lines {
-                                        println!("│ {}", line);
+                                        self.ui_writer.print_tool_output_line(line);
                                     }
                                 } else {
                                     for line in output_lines.iter().take(MAX_LINES) {
-                                        println!("│ {}", line);
+                                        self.ui_writer.print_tool_output_line(line);
                                     }
                                     let hidden_count = output_lines.len() - MAX_LINES;
-                                    println!(
-                                        "│ ... ({} more line{} hidden)",
-                                        hidden_count,
-                                        if hidden_count == 1 { "" } else { "s" }
-                                    );
+                                    self.ui_writer.print_tool_output_summary(hidden_count);
                                 }
                             }
 
@@ -1405,7 +1400,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                                         full_response.push_str(&format!("\n\n=> {}", summary_str));
                                     }
                                 }
-                                println!();
+                                self.ui_writer.println("");
                                 let ttft =
                                     first_token_time.unwrap_or_else(|| stream_start.elapsed());
                                 return Ok((full_response, ttft));
@@ -1413,10 +1408,8 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             // Closure marker with timing
                             if tool_call.tool != "final_output" {
-                                println!("└─ ⚡️ {}", Self::format_duration(exec_duration));
-                                println!();
-                                print!("🤖 ");
-                                io::stdout().flush()?;
+                                self.ui_writer.print_tool_timing(&Self::format_duration(exec_duration));
+                                self.ui_writer.print_agent_prompt();
                             }
 
                             // Add the tool call and result to the context window
@@ -1482,12 +1475,12 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                                 if !filtered_content.is_empty() {
                                     if !response_started {
-                                        print!("\r🤖 ");
+                                        self.ui_writer.print_agent_prompt();
                                         response_started = true;
                                     }
 
-                                    print!("{}", filtered_content);
-                                    let _ = io::stdout().flush();
+                                    self.ui_writer.print_agent_response(&filtered_content);
+                                    self.ui_writer.flush();
                                     current_response.push_str(&filtered_content);
                                 }
                             }
@@ -1599,7 +1592,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                                     full_response.push_str(&current_response);
                                 }
 
-                                println!();
+                                self.ui_writer.println("");
                                 let ttft =
                                     first_token_time.unwrap_or_else(|| stream_start.elapsed());
                                 return Ok((full_response, ttft));
@@ -1643,7 +1636,7 @@ The tool will execute immediately and you'll receive the result (success or erro
                     );
                 } else {
                     full_response.push_str(&current_response);
-                    println!();
+                    self.ui_writer.println("");
                 }
 
                 let ttft = first_token_time.unwrap_or_else(|| stream_start.elapsed());

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use g3_config::Config;
-use g3_core::{project::Project, Agent};
+use g3_core::{project::Project, Agent, ui_writer::UiWriter};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::path::PathBuf;
@@ -9,7 +9,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
 mod tui;
+mod ui_writer_impl;
 use tui::SimpleOutput;
+use ui_writer_impl::ConsoleUiWriter;
 
 #[derive(Parser)]
 #[command(name = "g3")]
@@ -108,7 +110,8 @@ pub async fn run() -> Result<()> {
     let config = Config::load(cli.config.as_deref())?;
 
     // Initialize agent
-    let mut agent = Agent::new(config).await?;
+    let ui_writer = ConsoleUiWriter::new();
+    let mut agent = Agent::new(config, ui_writer).await?;
 
     // Execute task, autonomous mode, or start interactive mode
     if cli.autonomous {
@@ -141,7 +144,7 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -> Result<()> {
+async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, show_code: bool) -> Result<()> {
     let output = SimpleOutput::new();
 
     output.print("");
@@ -278,7 +281,7 @@ async fn run_interactive(mut agent: Agent, show_prompt: bool, show_code: bool) -
     Ok(())
 }
 
-async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_code: bool, output: &SimpleOutput) {
+async fn execute_task<W: UiWriter>(agent: &mut Agent<W>, input: &str, show_prompt: bool, show_code: bool, output: &SimpleOutput) {
     // Show thinking indicator immediately
     output.print("🤔 Thinking...");
     // Note: flush is handled internally by println
@@ -337,7 +340,7 @@ async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_co
     }
 }
 
-fn display_context_progress(agent: &Agent, output: &SimpleOutput) {
+fn display_context_progress<W: UiWriter>(agent: &Agent<W>, output: &SimpleOutput) {
     let context = agent.get_context_window();
     output.print_context(context.used_tokens, context.total_tokens, context.percentage_used());
 }
@@ -369,7 +372,7 @@ fn setup_workspace_directory() -> Result<PathBuf> {
 
 // Simplified autonomous mode implementation
 async fn run_autonomous(
-    mut agent: Agent,
+    mut agent: Agent<ConsoleUiWriter>,
     project: Project,
     show_prompt: bool,
     show_code: bool,
@@ -443,7 +446,8 @@ async fn run_autonomous(
 
         // Create a new agent instance for coach mode to ensure fresh context
         let config = g3_config::Config::load(None)?;
-        let mut coach_agent = Agent::new(config).await?;
+        let ui_writer = ConsoleUiWriter::new();
+        let mut coach_agent = Agent::new(config, ui_writer).await?;
 
         // Ensure coach agent is also in the workspace directory
         project.enter_workspace()?;
