@@ -307,7 +307,31 @@ async fn execute_task(agent: &mut Agent, input: &str, show_prompt: bool, show_co
             if e.to_string().contains("cancelled") {
                 output.print("⚠️  Operation cancelled by user");
             } else {
+                // Enhanced error logging with detailed information
+                error!("=== TASK EXECUTION ERROR ===");
                 error!("Error: {}", e);
+                
+                // Log error chain
+                let mut source = e.source();
+                let mut depth = 1;
+                while let Some(err) = source {
+                    error!("  Caused by [{}]: {}", depth, err);
+                    source = err.source();
+                    depth += 1;
+                }
+                
+                // Log additional context
+                error!("Task input: {}", input);
+                error!("Error type: {}", std::any::type_name_of_val(&e));
+                
+                // Display user-friendly error message
+                output.print(&format!("❌ Error: {}", e));
+                
+                // If it's a stream error, provide helpful guidance
+                if e.to_string().contains("No response received") {
+                    output.print("💡 This may be a temporary issue. Please try again or check the logs for more details.");
+                    output.print("   Log files are saved in the 'logs/' directory.");
+                }
             }
         }
     }
