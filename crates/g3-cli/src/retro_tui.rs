@@ -24,6 +24,8 @@ const TERMINAL_DIM_GREEN: Color = Color::Rgb(0, 128, 32); // Dimmed green for bo
 const TERMINAL_BG: Color = Color::Rgb(0, 10, 0); // Very dark green background
 const TERMINAL_CYAN: Color = Color::Rgb(0, 255, 255); // Cyan for highlights
 const TERMINAL_RED: Color = Color::Rgb(255, 0, 0); // Red for errors
+const TERMINAL_PALE_BLUE: Color = Color::Rgb(173, 216, 230); // Pale blue for READY status
+const TERMINAL_DARK_AMBER: Color = Color::Rgb(204, 119, 34); // Dark amber for PROCESSING status
 
 /// Message types for communication between threads
 #[derive(Debug, Clone)]
@@ -351,18 +353,61 @@ impl RetroTui {
         let meter = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
 
         let (_, model) = provider_info;
-        let status_text = format!(
-            " STATUS: {} | CONTEXT: {} {:.1}% ({}/{}) | MODEL: {} ",
-            status_line, meter, percentage, used, total, model
-        );
 
-        let status = Paragraph::new(status_text)
-            .style(
+        // Determine status color based on status text
+        let status_color = if status_line == "READY" {
+            TERMINAL_PALE_BLUE
+        } else if status_line == "PROCESSING" {
+            TERMINAL_DARK_AMBER
+        } else {
+            // Default to amber for other statuses
+            TERMINAL_AMBER
+        };
+
+        // Build the status line with different colored spans
+        let status_spans = vec![
+            Span::styled(
+                " STATUS: ",
                 Style::default()
                     .fg(TERMINAL_AMBER)
-                    .bg(TERMINAL_BG)
                     .add_modifier(Modifier::BOLD),
-            )
+            ),
+            Span::styled(
+                status_line,
+                Style::default()
+                    .fg(status_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " | CONTEXT: ",
+                Style::default()
+                    .fg(TERMINAL_AMBER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} {:.1}% ({}/{})", meter, percentage, used, total),
+                Style::default()
+                    .fg(TERMINAL_AMBER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " | ",
+                Style::default()
+                    .fg(TERMINAL_AMBER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{} ", model),
+                Style::default()
+                    .fg(TERMINAL_AMBER)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        let status_line = Line::from(status_spans);
+
+        let status = Paragraph::new(status_line)
+            .style(Style::default().bg(TERMINAL_BG))
             .alignment(Alignment::Left);
 
         f.render_widget(status, area);
