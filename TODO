@@ -2,6 +2,7 @@ next tasks
 
 x get something working with autonomous mode
 - g3d
+- bug where it prints everything in a conversation turn all over again before final_output
 x ui abstraction from core
 - context token counting bug
 - embedded model

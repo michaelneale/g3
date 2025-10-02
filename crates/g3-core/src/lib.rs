@@ -299,7 +299,6 @@ impl ContextWindow {
     pub fn create_summary_prompt(&self) -> String {
         "Please provide a comprehensive summary of our conversation so far. Include:
 
-
 1. **Main Topic/Goal**: What is the primary task or objective being worked on?
 2. **Key Decisions**: What important decisions have been made?
 3. **Actions Taken**: What specific actions, commands, or code changes have been completed?
@@ -903,35 +902,6 @@ The tool will execute immediately and you'll receive the result (success or erro
                 }),
             },
             Tool {
-                name: "edit_file".to_string(),
-                description: "Edit a specific range of lines in a file. Replaces lines from start_of_range to end_of_range (inclusive, 1-indexed) with new content.".to_string(),
-                input_schema: json!({
-                    "type": "object",
-                    "properties": {
-                        "content": {
-                            "type": "string",
-                            "description": "The content to write to the file"
-                        }
-                    },
-                    "required": ["file_path", "content"]
-                }),
-            },
-            // Commented out edit_file tool to prevent g3 from using it
-            // Tool {
-            //     name: "edit_file".to_string(),
-            //     description: "Edit a specific range of lines in a file. Replaces lines from start_of_range to end_of_range (inclusive, 1-indexed) with new content.".to_string(),
-            //     input_schema: json!({
-            //         "type": "object",
-            //         "properties": {
-            //             "file_path": {"type": "string", "description": "The path to the file to edit"},
-            //             "content": {"type": "string", "description": "The new content to replace the specified range"},
-            //             "start_of_range": {"type": "integer", "description": "The starting line number (1-indexed, inclusive)"},
-            //             "end_of_range": {"type": "integer", "description": "The ending line number (1-indexed, inclusive)"}
-            //         },
-            //         "required": ["file_path", "content", "start_of_range", "end_of_range"]
-            //     }),
-            // },
-            Tool {
                 name: "str_replace".to_string(),
                 description: "Apply a unified diff to a file. Supports multiple hunks and context lines. Optionally constrain the search to a [start, end) character range (0-indexed; end is EXCLUSIVE). Useful to disambiguate matches or limit scope in large files.".to_string(),
                 input_schema: json!({
@@ -1134,7 +1104,9 @@ The tool will execute immediately and you'll receive the result (success or erro
             // Get the summary
             match provider.complete(summary_request).await {
                 Ok(summary_response) => {
-                    self.ui_writer.print_context_status("✅ Summary created successfully. Resetting context window...\n");
+                    self.ui_writer.print_context_status(
+                        "✅ Summary created successfully. Resetting context window...\n",
+                    );
 
                     // Extract the latest user message from the request
                     let latest_user_msg = request
@@ -1151,7 +1123,9 @@ The tool will execute immediately and you'll receive the result (success or erro
                     // Update the request with new context
                     request.messages = self.context_window.conversation_history.clone();
 
-                    self.ui_writer.print_context_status("🔄 Context reset complete. Continuing with your request...\n");
+                    self.ui_writer.print_context_status(
+                        "🔄 Context reset complete. Continuing with your request...\n",
+                    );
                 }
                 Err(e) => {
                     error!("Failed to create summary: {}", e);
@@ -1408,7 +1382,8 @@ The tool will execute immediately and you'll receive the result (success or erro
 
                             // Closure marker with timing
                             if tool_call.tool != "final_output" {
-                                self.ui_writer.print_tool_timing(&Self::format_duration(exec_duration));
+                                self.ui_writer
+                                    .print_tool_timing(&Self::format_duration(exec_duration));
                                 self.ui_writer.print_agent_prompt();
                             }
 
