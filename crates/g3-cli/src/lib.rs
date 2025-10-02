@@ -1,19 +1,19 @@
 use anyhow::Result;
 use clap::Parser;
 use g3_config::Config;
-use g3_core::{project::Project, Agent, ui_writer::UiWriter};
+use g3_core::{project::Project, ui_writer::UiWriter, Agent};
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
 
+mod retro_tui;
 mod tui;
 mod ui_writer_impl;
-mod retro_tui;
+use retro_tui::RetroTui;
 use tui::SimpleOutput;
 use ui_writer_impl::{ConsoleUiWriter, RetroTuiWriter};
-use retro_tui::RetroTui;
 
 #[derive(Parser)]
 #[command(name = "g3")]
@@ -91,14 +91,11 @@ pub async fn run() -> Result<()> {
         // In retro mode, we don't want any logging output to interfere with the TUI
         // We'll use a no-op subscriber
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-        
+
         // Create a filter that suppresses ALL logs in retro mode
-        let filter = EnvFilter::from_default_env()
-            .add_directive("off".parse().unwrap()); // Turn off all logging
-        
-        tracing_subscriber::registry()
-            .with(filter)
-            .init();
+        let filter = EnvFilter::from_default_env().add_directive("off".parse().unwrap()); // Turn off all logging
+
+        tracing_subscriber::registry().with(filter).init();
     }
 
     if !cli.retro {
@@ -167,7 +164,7 @@ pub async fn run() -> Result<()> {
         if !cli.retro {
             info!("Starting interactive mode");
         }
-        
+
         if cli.retro {
             // Use retro terminal UI
             run_interactive_retro(config, cli.show_prompt, cli.show_code).await?;
@@ -185,22 +182,22 @@ pub async fn run() -> Result<()> {
 async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: bool) -> Result<()> {
     use crossterm::event::{self, Event, KeyCode, KeyModifiers};
     use std::time::Duration;
-    
+
     // Set environment variable to suppress println in other crates
     std::env::set_var("G3_RETRO_MODE", "1");
-    
+
     // Initialize the retro terminal UI
     let tui = RetroTui::start().await?;
-    
+
     // Create agent with RetroTuiWriter
     let ui_writer = RetroTuiWriter::new(tui.clone());
     let mut agent = Agent::new(config, ui_writer).await?;
-    
+
     // Display initial system messages
     tui.output("SYSTEM: G3 AI CODING AGENT ONLINE");
     tui.output("SYSTEM: READY FOR INPUT");
     tui.output("");
-    
+
     // Display provider and model information
     match agent.get_provider_info() {
         Ok((provider, model)) => {
@@ -210,26 +207,28 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
             tui.update_provider_info("ERROR", &e.to_string());
         }
     }
-    
+
     tui.output("");
-    tui.output("Type 'exit' or 'quit' to exit, use Up/Down arrows to scroll output");
-    tui.output("For multiline input: use \\ at the end of a line to continue");
     tui.output("");
-    
+
     // Track multiline input
     let mut multiline_buffer = String::new();
     let mut in_multiline = false;
     let mut input_buffer = String::new();
-    
+
     // Main event loop
     loop {
         // Update context window display
         let context = agent.get_context_window();
-        tui.update_context(context.used_tokens, context.total_tokens, context.percentage_used());
-        
+        tui.update_context(
+            context.used_tokens,
+            context.total_tokens,
+            context.percentage_used(),
+        );
+
         // Update the displayed input buffer
         tui.update_input(&input_buffer);
-        
+
         // Poll for keyboard events
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
@@ -245,7 +244,7 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
                     KeyCode::Enter => {
                         if !input_buffer.is_empty() {
                             let trimmed = input_buffer.trim_end();
-                            
+
                             // Check if line ends with backslash for continuation
                             if trimmed.ends_with('\\') {
                                 // Remove the backslash and add to buffer
@@ -257,7 +256,7 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
                                 tui.status("MULTILINE INPUT");
                                 continue;
                             }
-                            
+
                             // If we're in multiline mode and no backslash, this is the final line
                             let final_input = if in_multiline {
                                 multiline_buffer.push_str(&input_buffer);
@@ -269,24 +268,34 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
                             } else {
                                 input_buffer.clone()
                             };
-                            
+
                             input_buffer.clear();
-                            
+
                             let input = final_input.trim().to_string();
                             if input.is_empty() {
                                 continue;
                             }
-                            
+
                             if input == "exit" || input == "quit" {
                                 tui.exit();
                                 break;
                             }
-                            
+
                             // Execute the task
                             tui.output(&format!("> {}", input));
                             tui.status("PROCESSING");
-                            
-                            match agent.execute_task_with_timing(&input, None, false, show_prompt, show_code, true).await {
+
+                            match agent
+                                .execute_task_with_timing(
+                                    &input,
+                                    None,
+                                    false,
+                                    show_prompt,
+                                    show_code,
+                                    true,
+                                )
+                                .await
+                            {
                                 Ok(response) => {
                                     tui.output(&response);
                                     tui.status("READY");
@@ -326,22 +335,26 @@ async fn run_interactive_retro(config: Config, show_prompt: bool, show_code: boo
                 }
             }
         }
-        
+
         // Small delay to prevent CPU spinning
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    
+
     tui.output("SYSTEM: SHUTDOWN INITIATED");
     Ok(())
 }
 
-async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, show_code: bool) -> Result<()> {
+async fn run_interactive<W: UiWriter>(
+    mut agent: Agent<W>,
+    show_prompt: bool,
+    show_code: bool,
+) -> Result<()> {
     let output = SimpleOutput::new();
 
     output.print("");
     output.print("🤖 G3 AI Coding Agent - Interactive Mode");
     output.print(
-        "I solve problems by writing and executing code. Tell me what you need to accomplish!"
+        "I solve problems by writing and executing code. Tell me what you need to accomplish!",
     );
     output.print("");
 
@@ -389,7 +402,7 @@ async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, sh
         match readline {
             Ok(line) => {
                 let trimmed = line.trim_end();
-                
+
                 // Check if line ends with backslash for continuation
                 if trimmed.ends_with('\\') {
                     // Remove the backslash and add to buffer
@@ -399,7 +412,7 @@ async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, sh
                     in_multiline = true;
                     continue;
                 }
-                
+
                 // If we're in multiline mode and no backslash, this is the final line
                 if in_multiline {
                     multiline_buffer.push_str(&line);
@@ -407,35 +420,35 @@ async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, sh
                     // Process the complete multiline input
                     let input = multiline_buffer.trim().to_string();
                     multiline_buffer.clear();
-                    
+
                     if input.is_empty() {
                         continue;
                     }
-                    
+
                     // Add complete multiline to history
                     rl.add_history_entry(&input)?;
-                    
+
                     if input == "exit" || input == "quit" {
                         break;
                     }
-                    
+
                     // Process the multiline input
                     execute_task(&mut agent, &input, show_prompt, show_code, &output).await;
                 } else {
                     // Single line input
                     let input = line.trim().to_string();
-                    
+
                     if input.is_empty() {
                         continue;
                     }
-                    
+
                     if input == "exit" || input == "quit" {
                         break;
                     }
-                    
+
                     // Add to history
                     rl.add_history_entry(&input)?;
-                    
+
                     // Process the single line input
                     execute_task(&mut agent, &input, show_prompt, show_code, &output).await;
                 }
@@ -472,7 +485,13 @@ async fn run_interactive<W: UiWriter>(mut agent: Agent<W>, show_prompt: bool, sh
     Ok(())
 }
 
-async fn execute_task<W: UiWriter>(agent: &mut Agent<W>, input: &str, show_prompt: bool, show_code: bool, output: &SimpleOutput) {
+async fn execute_task<W: UiWriter>(
+    agent: &mut Agent<W>,
+    input: &str,
+    show_prompt: bool,
+    show_code: bool,
+    output: &SimpleOutput,
+) {
     // Show thinking indicator immediately
     output.print("🤔 Thinking...");
     // Note: flush is handled internally by println
@@ -504,7 +523,7 @@ async fn execute_task<W: UiWriter>(agent: &mut Agent<W>, input: &str, show_promp
                 // Enhanced error logging with detailed information
                 error!("=== TASK EXECUTION ERROR ===");
                 error!("Error: {}", e);
-                
+
                 // Log error chain
                 let mut source = e.source();
                 let mut depth = 1;
@@ -513,14 +532,14 @@ async fn execute_task<W: UiWriter>(agent: &mut Agent<W>, input: &str, show_promp
                     source = err.source();
                     depth += 1;
                 }
-                
+
                 // Log additional context
                 error!("Task input: {}", input);
                 error!("Error type: {}", std::any::type_name_of_val(&e));
-                
+
                 // Display user-friendly error message
                 output.print(&format!("❌ Error: {}", e));
-                
+
                 // If it's a stream error, provide helpful guidance
                 if e.to_string().contains("No response received") {
                     output.print("💡 This may be a temporary issue. Please try again or check the logs for more details.");
@@ -533,7 +552,11 @@ async fn execute_task<W: UiWriter>(agent: &mut Agent<W>, input: &str, show_promp
 
 fn display_context_progress<W: UiWriter>(agent: &Agent<W>, output: &SimpleOutput) {
     let context = agent.get_context_window();
-    output.print_context(context.used_tokens, context.total_tokens, context.percentage_used());
+    output.print_context(
+        context.used_tokens,
+        context.total_tokens,
+        context.percentage_used(),
+    );
 }
 
 /// Set up the workspace directory for autonomous mode
@@ -570,15 +593,21 @@ async fn run_autonomous(
     max_turns: usize,
 ) -> Result<()> {
     let output = SimpleOutput::new();
-    
+
     output.print("🤖 G3 AI Coding Agent - Autonomous Mode");
-    output.print(&format!("📁 Using workspace: {}", project.workspace().display()));
-    
+    output.print(&format!(
+        "📁 Using workspace: {}",
+        project.workspace().display()
+    ));
+
     // Check if requirements exist
     if !project.has_requirements() {
         output.print("❌ Error: requirements.md not found in workspace directory");
         output.print("   Please create a requirements.md file with your project requirements at:");
-        output.print(&format!("   {}/requirements.md", project.workspace().display()));
+        output.print(&format!(
+            "   {}/requirements.md",
+            project.workspace().display()
+        ));
         return Ok(());
     }
 
@@ -593,13 +622,16 @@ async fn run_autonomous(
 
     output.print("📋 Requirements loaded from requirements.md");
     output.print("🔄 Starting coach-player feedback loop...");
-    
+
     let mut turn = 1;
     let mut coach_feedback = String::new();
     let mut implementation_approved = false;
 
     loop {
-        output.print(&format!("\n=== TURN {}/{} - PLAYER MODE ===", turn, max_turns));
+        output.print(&format!(
+            "\n=== TURN {}/{} - PLAYER MODE ===",
+            turn, max_turns
+        ));
 
         // Player mode: implement requirements (with coach feedback if available)
         let player_prompt = if coach_feedback.is_empty() {
@@ -615,7 +647,7 @@ async fn run_autonomous(
         };
 
         output.print("🎯 Starting player implementation...");
-        
+
         // Execute player task and handle the result properly
         match agent
             .execute_task_with_timing(&player_prompt, None, false, show_prompt, show_code, true)
@@ -631,7 +663,7 @@ async fn run_autonomous(
                 // Continue to coach review even if player had an error
             }
         }
-        
+
         // Give some time for file operations to complete
         tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
@@ -643,7 +675,10 @@ async fn run_autonomous(
         // Ensure coach agent is also in the workspace directory
         project.enter_workspace()?;
 
-        output.print(&format!("\n=== TURN {}/{} - COACH MODE ===", turn, max_turns));
+        output.print(&format!(
+            "\n=== TURN {}/{} - COACH MODE ===",
+            turn, max_turns
+        ));
 
         // Coach mode: critique the implementation
         let coach_prompt = format!(
