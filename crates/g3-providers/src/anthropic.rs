@@ -115,6 +115,10 @@ use crate::{
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const MAX_RETRIES: u32 = 3;
+const INITIAL_RETRY_DELAY_MS: u64 = 1000;
+const MAX_RETRY_DELAY_MS: u64 = 10000;
+const RETRY_MULTIPLIER: u64 = 2;
 
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
@@ -133,7 +137,7 @@ impl AnthropicProvider {
         temperature: Option<f32>,
     ) -> Result<Self> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(120))  // Increased timeout to reduce timeout errors
             .build()
             .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
@@ -265,18 +269,77 @@ impl AnthropicProvider {
         Ok(request)
     }
 
+    /// Execute a request with exponential backoff retry logic
+    async fn execute_with_retry<F, Fut, T>(
+        &self,
+        operation_name: &str,
+        mut operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut() -> Fut,
+        Fut: std::future::Future<Output = Result<T>>,
+    {
+        let mut retry_count = 0;
+        let mut delay_ms = INITIAL_RETRY_DELAY_MS;
+
+        loop {
+            match operation().await {
+                Ok(result) => {
+                    if retry_count > 0 {
+                        info!("{} succeeded after {} retries", operation_name, retry_count);
+                    }
+                    return Ok(result);
+                }
+                Err(e) => {
+                    let error_str = e.to_string();
+                    
+                    // Check if this is a retryable error
+                    let is_retryable = error_str.contains("timed out") ||
+                        error_str.contains("timeout") ||
+                        error_str.contains("connection reset") ||
+                        error_str.contains("connection closed") ||
+                        error_str.contains("429") ||  // Rate limit
+                        error_str.contains("502") ||  // Bad gateway
+                        error_str.contains("503") ||  // Service unavailable
+                        error_str.contains("504");    // Gateway timeout
+
+                    if !is_retryable || retry_count >= MAX_RETRIES {
+                        error!("{} failed after {} retries: {}", operation_name, retry_count, e);
+                        return Err(e);
+                    }
+
+                    warn!(
+                        "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
+                        operation_name, retry_count + 1, MAX_RETRIES, e, delay_ms
+                    );
+
+                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    
+                    retry_count += 1;
+                    delay_ms = (delay_ms * RETRY_MULTIPLIER).min(MAX_RETRY_DELAY_MS);
+                }
+            }
+        }
+    }
+
     async fn parse_streaming_response(
         &self,
         mut stream: impl futures_util::Stream<Item = reqwest::Result<Bytes>> + Unpin,
         tx: mpsc::Sender<Result<CompletionChunk>>,
     ) {
+        use tokio::time::Duration;
         let mut buffer = String::new();
         let mut current_tool_calls: Vec<ToolCall> = Vec::new();
         let mut partial_tool_json = String::new(); // Accumulate partial JSON for tool calls
+        let mut consecutive_errors = 0;
+        let max_consecutive_errors = 3;
 
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(chunk) => {
+                    // Reset error counter on successful chunk
+                    consecutive_errors = 0;
+                    
                     let chunk_str = match std::str::from_utf8(&chunk) {
                         Ok(s) => s,
                         Err(e) => {
@@ -450,9 +513,28 @@ impl AnthropicProvider {
                     }
                 }
                 Err(e) => {
-                    error!("Stream error: {}", e);
-                    let _ = tx.send(Err(anyhow!("Stream error: {}", e))).await;
-                    return;
+                    consecutive_errors += 1;
+                    let error_str = e.to_string();
+                    
+                    // Check if this is a retryable streaming error
+                    let is_retryable = error_str.contains("timed out") ||
+                        error_str.contains("timeout") ||
+                        error_str.contains("connection reset") ||
+                        error_str.contains("connection closed");
+                    
+                    if is_retryable && consecutive_errors < max_consecutive_errors {
+                        warn!(
+                            "Retryable stream error (attempt {}/{}): {}. Continuing...",
+                            consecutive_errors, max_consecutive_errors, e
+                        );
+                        // Add a small delay before continuing
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        continue;
+                    } else {
+                        error!("Fatal stream error after {} consecutive errors: {}", consecutive_errors, e);
+                        let _ = tx.send(Err(anyhow!("Stream error: {}", e))).await;
+                        return;
+                    }
                 }
             }
         }
@@ -489,26 +571,34 @@ impl LLMProvider for AnthropicProvider {
         debug!("Sending request to Anthropic API: model={}, max_tokens={}, temperature={}", 
                request_body.model, request_body.max_tokens, request_body.temperature);
 
-        let response = self
-            .create_request_builder(false)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send request to Anthropic API: {}", e))?;
+        // Use retry logic for the API call
+        let anthropic_response = self.execute_with_retry(
+            "Anthropic completion request",
+            || async {
+                let response = self
+                    .create_request_builder(false)
+                    .json(&request_body)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send request to Anthropic API: {}", e))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!("Anthropic API error {}: {}", status, error_text));
-        }
+                let status = response.status();
+                if !status.is_success() {
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(anyhow!("Anthropic API error {}: {}", status, error_text));
+                }
 
-        let anthropic_response: AnthropicResponse = response
-            .json()
-            .await
-            .map_err(|e| anyhow!("Failed to parse Anthropic response: {}", e))?;
+                let anthropic_response: AnthropicResponse = response
+                    .json()
+                    .await
+                    .map_err(|e| anyhow!("Failed to parse Anthropic response: {}", e))?;
+                
+                Ok(anthropic_response)
+            }
+        ).await?;
 
         // Extract text content from the response
         let content = anthropic_response
@@ -562,21 +652,29 @@ impl LLMProvider for AnthropicProvider {
         // Debug: Log the full request body
         debug!("Full request body: {}", serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Failed to serialize".to_string()));
 
-        let response = self
-            .create_request_builder(true)
-            .json(&request_body)
-            .send()
-            .await
-            .map_err(|e| anyhow!("Failed to send streaming request to Anthropic API: {}", e))?;
+        // Use retry logic for the streaming API call
+        let response = self.execute_with_retry(
+            "Anthropic streaming request",
+            || async {
+                let response = self
+                    .create_request_builder(true)
+                    .json(&request_body)
+                    .send()
+                    .await
+                    .map_err(|e| anyhow!("Failed to send streaming request to Anthropic API: {}", e))?;
 
-        let status = response.status();
-        if !status.is_success() {
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(anyhow!("Anthropic API error {}: {}", status, error_text));
-        }
+                let status = response.status();
+                if !status.is_success() {
+                    let error_text = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "Unknown error".to_string());
+                    return Err(anyhow!("Anthropic API error {}: {}", status, error_text));
+                }
+                
+                Ok(response)
+            }
+        ).await?;
 
         let stream = response.bytes_stream();
         let (tx, rx) = mpsc::channel(100);
