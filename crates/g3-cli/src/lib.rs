@@ -18,20 +18,23 @@ use tracing::{error, info};
 #[command(version)]
 pub struct Cli {
     /// Enable verbose logging
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     pub verbose: bool,
 
-    /// Show the system prompt being sent to the LLM
+    /// Configuration file path
+    #[arg(short, long, global = true)]
+    pub config: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
+    /// Show the system prompt being sent to the LLM (for default mode)
     #[arg(long)]
     pub show_prompt: bool,
 
-    /// Show the generated code before execution
+    /// Show the generated code before execution (for default mode)
     #[arg(long)]
     pub show_code: bool,
-
-    /// Configuration file path
-    #[arg(short, long)]
-    pub config: Option<String>,
 
     /// Task to execute (if provided, runs in single-shot mode instead of interactive)
     pub task: Option<String>,
@@ -43,6 +46,12 @@ pub struct Cli {
     /// Maximum number of turns in autonomous mode (default: 5)
     #[arg(long, default_value = "5")]
     pub max_turns: usize,
+}
+
+#[derive(Parser)]
+pub enum Command {
+    /// Run G3 in ACP (Agent Client Protocol) server mode
+    Acp,
 }
 
 pub async fn run() -> Result<()> {
@@ -79,6 +88,12 @@ pub async fn run() -> Result<()> {
 
     // Load configuration
     let config = Config::load(cli.config.as_deref())?;
+
+    // Handle ACP subcommand if present
+    if let Some(Command::Acp) = cli.command {
+        info!("Starting ACP server mode");
+        return g3_acp::run_acp_server(config).await;
+    }
 
     // Initialize agent
     let mut agent = Agent::new(config).await?;
