@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 // Retro sci-fi color scheme inspired by Alien terminals
-const TERMINAL_GREEN: Color = Color::Rgb(154, 174, 135); // Softer vintage green
+const TERMINAL_GREEN: Color = Color::Rgb(80, 105, 83); // Softer vintage green
 const TERMINAL_AMBER: Color = Color::Rgb(242, 204, 148); // Softer amber for warnings
 const TERMINAL_DIM_GREEN: Color = Color::Rgb(154, 174, 135); // Same softer green for borders
 const TERMINAL_BG: Color = Color::Rgb(0, 10, 0); // Very dark green background
