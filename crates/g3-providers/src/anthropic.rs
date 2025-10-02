@@ -115,10 +115,7 @@ use crate::{
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const MAX_RETRIES: u32 = 3;
-const INITIAL_RETRY_DELAY_MS: u64 = 1000;
-const MAX_RETRY_DELAY_MS: u64 = 10000;
-const RETRY_MULTIPLIER: u64 = 2;
+use crate::retry::{execute_with_retry, RetryConfig};
 
 #[derive(Debug, Clone)]
 pub struct AnthropicProvider {
@@ -127,6 +124,7 @@ pub struct AnthropicProvider {
     model: String,
     max_tokens: u32,
     temperature: f32,
+    retry_config: RetryConfig,
 }
 
 impl AnthropicProvider {
@@ -151,7 +149,19 @@ impl AnthropicProvider {
             model,
             max_tokens: max_tokens.unwrap_or(4096),
             temperature: temperature.unwrap_or(0.1),
+            retry_config: RetryConfig::default(),
         })
+    }
+
+    /// Set a custom retry configuration for this provider
+    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = config;
+        self
+    }
+
+    /// Get the current retry configuration
+    pub fn retry_config(&self) -> &RetryConfig {
+        &self.retry_config
     }
 
     fn create_request_builder(&self, streaming: bool) -> RequestBuilder {
@@ -267,59 +277,6 @@ impl AnthropicProvider {
         }
 
         Ok(request)
-    }
-
-    /// Execute a request with exponential backoff retry logic
-    async fn execute_with_retry<F, Fut, T>(
-        &self,
-        operation_name: &str,
-        mut operation: F,
-    ) -> Result<T>
-    where
-        F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
-    {
-        let mut retry_count = 0;
-        let mut delay_ms = INITIAL_RETRY_DELAY_MS;
-
-        loop {
-            match operation().await {
-                Ok(result) => {
-                    if retry_count > 0 {
-                        info!("{} succeeded after {} retries", operation_name, retry_count);
-                    }
-                    return Ok(result);
-                }
-                Err(e) => {
-                    let error_str = e.to_string();
-                    
-                    // Check if this is a retryable error
-                    let is_retryable = error_str.contains("timed out") ||
-                        error_str.contains("timeout") ||
-                        error_str.contains("connection reset") ||
-                        error_str.contains("connection closed") ||
-                        error_str.contains("429") ||  // Rate limit
-                        error_str.contains("502") ||  // Bad gateway
-                        error_str.contains("503") ||  // Service unavailable
-                        error_str.contains("504");    // Gateway timeout
-
-                    if !is_retryable || retry_count >= MAX_RETRIES {
-                        error!("{} failed after {} retries: {}", operation_name, retry_count, e);
-                        return Err(e);
-                    }
-
-                    warn!(
-                        "{} failed (attempt {}/{}): {}. Retrying in {}ms...",
-                        operation_name, retry_count + 1, MAX_RETRIES, e, delay_ms
-                    );
-
-                    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
-                    
-                    retry_count += 1;
-                    delay_ms = (delay_ms * RETRY_MULTIPLIER).min(MAX_RETRY_DELAY_MS);
-                }
-            }
-        }
     }
 
     async fn parse_streaming_response(
@@ -572,9 +529,10 @@ impl LLMProvider for AnthropicProvider {
                request_body.model, request_body.max_tokens, request_body.temperature);
 
         // Use retry logic for the API call
-        let anthropic_response = self.execute_with_retry(
+        let anthropic_response = execute_with_retry(
             "Anthropic completion request",
             || async {
+                let request_body = request_body.clone();
                 let response = self
                     .create_request_builder(false)
                     .json(&request_body)
@@ -597,7 +555,8 @@ impl LLMProvider for AnthropicProvider {
                     .map_err(|e| anyhow!("Failed to parse Anthropic response: {}", e))?;
                 
                 Ok(anthropic_response)
-            }
+            },
+            &self.retry_config,
         ).await?;
 
         // Extract text content from the response
@@ -653,9 +612,10 @@ impl LLMProvider for AnthropicProvider {
         debug!("Full request body: {}", serde_json::to_string_pretty(&request_body).unwrap_or_else(|_| "Failed to serialize".to_string()));
 
         // Use retry logic for the streaming API call
-        let response = self.execute_with_retry(
+        let response = execute_with_retry(
             "Anthropic streaming request",
             || async {
+                let request_body = request_body.clone();
                 let response = self
                     .create_request_builder(true)
                     .json(&request_body)
@@ -673,7 +633,8 @@ impl LLMProvider for AnthropicProvider {
                 }
                 
                 Ok(response)
-            }
+            },
+            &self.retry_config,
         ).await?;
 
         let stream = response.bytes_stream();
@@ -704,7 +665,7 @@ impl LLMProvider for AnthropicProvider {
 
 // Anthropic API request/response structures
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct AnthropicRequest {
     model: String,
     max_tokens: u32,
@@ -717,14 +678,14 @@ struct AnthropicRequest {
     stream: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct AnthropicTool {
     name: String,
     description: String,
     input_schema: AnthropicToolInputSchema,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct AnthropicToolInputSchema {
     #[serde(rename = "type")]
     schema_type: String,
@@ -733,13 +694,13 @@ struct AnthropicToolInputSchema {
     required: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AnthropicMessage {
     role: String,
     content: Vec<AnthropicContent>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum AnthropicContent {
     #[serde(rename = "text")]
