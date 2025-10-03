@@ -34,6 +34,7 @@ pub enum TuiMessage {
     AgentOutput(String),
     ToolOutput {
         name: String,
+        caption: String,
         content: String,
     },
     SystemStatus(String),
@@ -103,7 +104,7 @@ impl TerminalState {
     }
 
     /// Format tool call output with a box
-    fn format_tool_output(&mut self, tool_name: &str, content: &str) {
+    fn format_tool_output(&mut self, tool_name: &str, caption: &str, content: &str) {
         // Calculate box width (use a reasonable width, accounting for terminal size)
         let box_width = 80;
         let border_char = "─";
@@ -122,7 +123,7 @@ impl TerminalState {
         ));
 
         // Add header with tool name (will be styled with green background in draw)
-        let header_text = format!(" {} ", tool_name.to_uppercase());
+        let header_text = format!(" {} | {}", tool_name.to_uppercase(), caption);
         let padding = box_width - 2 - header_text.len();
         self.output_history.push(format!(
             "{}[TOOL_HEADER]{}{}{}",
@@ -189,10 +190,25 @@ impl TerminalState {
 
     /// Add text to output history
     fn add_output(&mut self, text: &str) {
-        // Split text by newlines and add each line
-        for line in text.lines() {
+        let mut lines = text.lines();
+
+        // Handle the first line specially
+        if let Some(first_line) = lines.next() {
+            if let Some(last) = self.output_history.last_mut() {
+                // Append first fragment to the last element
+                last.push_str(first_line);
+            } else {
+                // No existing elements, just push the first line
+                self.output_history.push(first_line.to_string());
+            }
+        }
+
+        // Push the remaining lines individually
+        for line in lines {
             self.output_history.push(line.to_string());
         }
+
+        // Update scroll state
         // Auto-scroll to bottom only if user hasn't manually scrolled
         if !self.manual_scroll {
             let total_lines = self.output_history.len();
@@ -258,16 +274,17 @@ impl RetroTui {
                         TuiMessage::AgentOutput(text) => {
                             state.add_output(&text);
                         }
-                        TuiMessage::ToolOutput { name, content } => {
-                            state.format_tool_output(&name, &content);
+                        TuiMessage::ToolOutput {
+                            name,
+                            caption,
+                            content,
+                        } => {
+                            state.format_tool_output(&name, &caption, &content);
                         }
                         TuiMessage::SystemStatus(status) => {
                             let was_processing = state.status_line == "PROCESSING";
                             state.status_line = status;
-                            // When transitioning from PROCESSING to READY, add padding
-                            // This ensures we can scroll to see all content
                             if was_processing && state.status_line == "READY" {
-                                state.add_padding();
                                 state.manual_scroll = false; // Reset manual scroll
                             }
                         }
@@ -611,9 +628,10 @@ impl RetroTui {
     }
 
     /// Send tool output to the terminal
-    pub fn tool_output(&self, name: &str, content: &str) {
+    pub fn tool_output(&self, name: &str, caption: &str, content: &str) {
         let _ = self.tx.send(TuiMessage::ToolOutput {
             name: name.to_string(),
+            caption: caption.to_string(),
             content: content.to_string(),
         });
     }
