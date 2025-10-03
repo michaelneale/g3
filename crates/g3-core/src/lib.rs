@@ -1507,7 +1507,10 @@ The tool will execute immediately and you'll receive the result (success or erro
                                     // Log the full request JSON
                                     match serde_json::to_string_pretty(&request) {
                                         Ok(json) => {
-                                            error!("Full request JSON:\n{}", json);
+                                            error!(
+                                                "(turn on DEBUG logging for the raw JSON request)"
+                                            );
+                                            debug!("Full request JSON:\n{}", json);
                                         }
                                         Err(e) => {
                                             error!("Failed to serialize request: {}", e);

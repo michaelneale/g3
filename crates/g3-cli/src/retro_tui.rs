@@ -52,6 +52,10 @@ struct TerminalState {
     scroll_offset: usize,
     /// Cursor blink state
     cursor_blink: bool,
+    /// Last known visible height of output area
+    last_visible_height: usize,
+    /// User has manually scrolled (disable auto-scroll)
+    manual_scroll: bool,
     /// Last cursor blink time
     last_blink: Instant,
     /// System status line
@@ -82,6 +86,8 @@ impl TerminalState {
             ],
             scroll_offset: 0,
             cursor_blink: true,
+            last_visible_height: 20, // Default estimate
+            manual_scroll: false,
             last_blink: Instant::now(),
             status_line: "READY".to_string(),
             context_info: (0, 0, 0.0),
@@ -148,6 +154,16 @@ impl TerminalState {
         // Add bottom border
         self.output_history.push(format!("{}{}{}", corner_bl, border_char.repeat(box_width - 2), corner_br));
         self.output_history.push(String::new()); // Empty line after box
+        // Auto-scroll to bottom only if user hasn't manually scrolled
+        if !self.manual_scroll {
+            let total_lines = self.output_history.len();
+            let visible_height = self.last_visible_height.max(1);
+            self.scroll_offset = if total_lines > visible_height {
+                total_lines.saturating_sub(visible_height)
+            } else {
+                0
+            };
+        }
     }
 
     /// Add text to output history
@@ -156,8 +172,28 @@ impl TerminalState {
         for line in text.lines() {
             self.output_history.push(line.to_string());
         }
-        // Auto-scroll to bottom
-        self.scroll_offset = self.output_history.len().saturating_sub(1);
+        // Auto-scroll to bottom only if user hasn't manually scrolled
+        if !self.manual_scroll {
+            let total_lines = self.output_history.len();
+            let visible_height = self.last_visible_height.max(1);
+            self.scroll_offset = if total_lines > visible_height {
+                total_lines.saturating_sub(visible_height)
+            } else {
+                0
+            };
+        }
+    }
+
+    /// Add padding lines to ensure content can be scrolled fully into view
+    fn add_padding(&mut self) {
+        // Add enough blank lines to ensure the last content can be scrolled into view
+        // This is a workaround for the scrolling calculation issues
+        let padding_lines = 5; // Add 5 blank lines for padding
+        for _ in 0..padding_lines {
+            self.output_history.push(String::new());
+        }
+        // Reset scroll to show the actual content (not the padding)
+        // This keeps the view focused on the last real content
     }
 }
 
@@ -205,7 +241,14 @@ impl RetroTui {
                             state.format_tool_output(&name, &content);
                         }
                         TuiMessage::SystemStatus(status) => {
+                            let was_processing = state.status_line == "PROCESSING";
                             state.status_line = status;
+                            // When transitioning from PROCESSING to READY, add padding
+                            // This ensures we can scroll to see all content
+                            if was_processing && state.status_line == "READY" {
+                                state.add_padding();
+                                state.manual_scroll = false; // Reset manual scroll
+                            }
                         }
                         TuiMessage::ContextUpdate {
                             used,
@@ -248,9 +291,9 @@ impl RetroTui {
 
                 // Redraw at ~60fps
                 if last_draw.elapsed() > Duration::from_millis(16) {
-                    let state = state_clone.lock().unwrap();
+                    let mut state = state_clone.lock().unwrap();
                     let mut term = terminal_clone.lock().unwrap();
-                    let _ = Self::draw(&mut term, &state);
+                    let _ = Self::draw(&mut term, &mut state);
                     last_draw = Instant::now();
                 }
 
@@ -261,9 +304,9 @@ impl RetroTui {
 
         // Initial draw
         {
-            let state = state.lock().unwrap();
+            let mut state = state.lock().unwrap();
             let mut term = terminal.lock().unwrap();
-            Self::draw(&mut term, &state)?;
+            Self::draw(&mut term, &mut state)?;
         }
 
         Ok(Self {
@@ -276,7 +319,7 @@ impl RetroTui {
     /// Draw the terminal UI
     fn draw(
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-        state: &TerminalState,
+        state: &mut TerminalState,
     ) -> Result<()> {
         terminal.draw(|f| {
             let size = f.area();
@@ -290,6 +333,10 @@ impl RetroTui {
                     Constraint::Length(1), // Status bar
                 ])
                 .split(size);
+
+            // Update the last known visible height for the output area
+            // This will be used for page up/down calculations
+            state.last_visible_height = chunks[1].height.saturating_sub(2) as usize;
 
             // Draw header/input area
             Self::draw_input_area(f, chunks[0], &state.input_buffer, state.cursor_blink);
@@ -344,10 +391,19 @@ impl RetroTui {
         // Calculate visible lines
         let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
         let total_lines = output_history.len();
-
-        // Adjust scroll offset to ensure it's valid
-        let max_scroll = total_lines.saturating_sub(visible_height);
-        let scroll = scroll_offset.min(max_scroll);
+        
+        // Calculate the maximum valid scroll position to ensure we can see all lines
+        // The max scroll should allow us to position the viewport such that the last line is visible
+        let max_scroll = total_lines.saturating_sub(1);
+        
+        // Ensure scroll offset is within valid range
+        // Clamp the scroll offset but ensure we can still see content at the bottom
+        let scroll = if scroll_offset + visible_height > total_lines && total_lines > visible_height {
+            // Adjust scroll to show the last visible_height lines
+            total_lines.saturating_sub(visible_height)
+        } else {
+            scroll_offset.min(max_scroll)
+        };
 
         // Get visible lines
         let visible_lines: Vec<Line> = output_history
@@ -572,6 +628,7 @@ impl RetroTui {
     pub fn scroll_up(&self) {
         if let Ok(mut state) = self.state.lock() {
             if state.scroll_offset > 0 {
+                state.manual_scroll = true;
                 state.scroll_offset -= 1;
             }
         }
@@ -579,19 +636,59 @@ impl RetroTui {
 
     pub fn scroll_down(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.scroll_offset += 1;
+            state.manual_scroll = true;
+            let total_lines = state.output_history.len();
+            let visible_height = state.last_visible_height.max(1);
+            
+            // Calculate max scroll position - should position viewport to show last lines
+            let max_scroll = if total_lines > visible_height {
+                total_lines.saturating_sub(visible_height)
+            } else {
+                0
+            };
+            state.scroll_offset = (state.scroll_offset + 1).min(max_scroll);
         }
     }
 
     pub fn scroll_page_up(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.scroll_offset = state.scroll_offset.saturating_sub(10);
+            state.manual_scroll = true;
+            // Use the last known visible height, or a reasonable default
+            // The actual visible area is typically around 20-30 lines minus borders
+            let page_size = if state.last_visible_height > 0 {
+                state.last_visible_height.saturating_sub(2) // Leave a couple lines for context
+            } else {
+                15 // Reasonable default
+            };
+            
+            if state.scroll_offset > 0 {
+                // Scroll up by a page worth of lines
+                state.scroll_offset = state.scroll_offset.saturating_sub(page_size);
+            }
         }
     }
 
     pub fn scroll_page_down(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.scroll_offset += 10;
+            state.manual_scroll = true;
+            let total_lines = state.output_history.len();
+            // Use the last known visible height, or a reasonable default
+            let page_size = if state.last_visible_height > 0 {
+                state.last_visible_height.saturating_sub(2) // Leave a couple lines for context
+            } else {
+                15 // Reasonable default
+            };
+            
+            // Calculate max scroll position - should position viewport to show last lines
+            let visible_height = state.last_visible_height.max(1);
+            let max_scroll = if total_lines > visible_height {
+                total_lines.saturating_sub(visible_height)
+            } else {
+                0
+            };
+            
+            // Scroll down by a page, but don't go past the end
+            state.scroll_offset = (state.scroll_offset + page_size).min(max_scroll);
         }
     }
 
@@ -603,7 +700,16 @@ impl RetroTui {
 
     pub fn scroll_end(&self) {
         if let Ok(mut state) = self.state.lock() {
-            state.scroll_offset = state.output_history.len().saturating_sub(1);
+            let total_lines = state.output_history.len();
+            let visible_height = state.last_visible_height.max(1);
+            // Scroll to show the last page of content - position viewport at the bottom
+            state.scroll_offset = if total_lines > visible_height {
+                total_lines.saturating_sub(visible_height)
+            } else {
+                0
+            };
+            // When scrolling to end, disable manual scroll so auto-scroll resumes
+            state.manual_scroll = false;
         }
     }
 }
