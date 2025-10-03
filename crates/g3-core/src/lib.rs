@@ -595,6 +595,7 @@ IMPORTANT: You must call tools to achieve goals. When you receive a request:
 6. Call the final_output task with a detailed summary when done with all tasks.
 
 For shell commands: Use the shell tool with the exact command needed. Avoid commands that produce a large amount of output, and consider piping those outputs to files. Example: If asked to list files, immediately call the shell tool with command parameter \"ls\".
+If you create temporary files or data for testing, place these in a subdir named 'tmp'. Do NOT pollute the current dir.
 
 IMPORTANT: If the user asks you to just respond with text (like \"just say hello\" or \"tell me about X\"), do NOT use tools. Simply respond with the requested text directly. Only use tools when you need to execute commands or complete tasks that require action.
 
