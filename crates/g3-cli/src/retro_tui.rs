@@ -18,20 +18,24 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 // Retro sci-fi color scheme inspired by Alien terminals
-const TERMINAL_GREEN: Color = Color::Rgb(80, 105, 83); // Softer vintage green
+const TERMINAL_GREEN: Color = Color::Rgb(136, 244, 152); // Mid green
 const TERMINAL_AMBER: Color = Color::Rgb(242, 204, 148); // Softer amber for warnings
-const TERMINAL_DIM_GREEN: Color = Color::Rgb(154, 174, 135); // Same softer green for borders
+const TERMINAL_DIM_GREEN: Color = Color::Rgb(154, 174, 135); // softer vintage green for borders
 const TERMINAL_BG: Color = Color::Rgb(0, 10, 0); // Very dark green background
 const TERMINAL_CYAN: Color = Color::Rgb(0, 255, 255); // Cyan for highlights
-const TERMINAL_RED: Color = Color::Rgb(255, 0, 0); // Red for errors
-const TERMINAL_PALE_BLUE: Color = Color::Rgb(173, 216, 230); // Pale blue for READY status
+const TERMINAL_RED: Color = Color::Rgb(239, 119, 109); // Red for errors or negative diffs
+const TERMINAL_PALE_BLUE: Color = Color::Rgb(173, 234, 251); // Pale blue for READY status
 const TERMINAL_DARK_AMBER: Color = Color::Rgb(204, 119, 34); // Dark amber for PROCESSING status
+const TERMINAL_WHITE: Color = Color::Rgb(218, 218, 219); // Dimmer white for punchy text
 
 /// Message types for communication between threads
 #[derive(Debug, Clone)]
 pub enum TuiMessage {
     AgentOutput(String),
-    ToolOutput { name: String, content: String },
+    ToolOutput {
+        name: String,
+        content: String,
+    },
     SystemStatus(String),
     ContextUpdate {
         used: u32,
@@ -108,7 +112,7 @@ impl TerminalState {
         let corner_bl = "└";
         let corner_br = "┘";
         let vertical = "│";
-        
+
         // Add top border
         self.output_history.push(format!(
             "{}{}{}",
@@ -116,7 +120,7 @@ impl TerminalState {
             border_char.repeat(box_width - 2),
             corner_tr
         ));
-        
+
         // Add header with tool name (will be styled with green background in draw)
         let header_text = format!(" {} ", tool_name.to_uppercase());
         let padding = box_width - 2 - header_text.len();
@@ -127,7 +131,7 @@ impl TerminalState {
             " ".repeat(padding),
             vertical
         ));
-        
+
         // Add separator between header and content
         self.output_history.push(format!(
             "{}{}{}",
@@ -135,26 +139,43 @@ impl TerminalState {
             border_char.repeat(box_width - 2),
             "┤"
         ));
-        
+
         // Add content lines
         for line in content.lines() {
             // Wrap long lines if needed
             let max_content_width = box_width - 4; // Account for borders and padding
             if line.len() <= max_content_width {
-                self.output_history.push(format!("{} {:<width$} {}", vertical, line, vertical, width = max_content_width));
+                self.output_history.push(format!(
+                    "{} {:<width$} {}",
+                    vertical,
+                    line,
+                    vertical,
+                    width = max_content_width
+                ));
             } else {
                 // Simple word wrapping for long lines
                 for chunk in line.chars().collect::<Vec<_>>().chunks(max_content_width) {
                     let chunk_str: String = chunk.iter().collect();
-                    self.output_history.push(format!("{} {:<width$} {}", vertical, chunk_str, vertical, width = max_content_width));
+                    self.output_history.push(format!(
+                        "{} {:<width$} {}",
+                        vertical,
+                        chunk_str,
+                        vertical,
+                        width = max_content_width
+                    ));
                 }
             }
         }
-        
+
         // Add bottom border
-        self.output_history.push(format!("{}{}{}", corner_bl, border_char.repeat(box_width - 2), corner_br));
+        self.output_history.push(format!(
+            "{}{}{}",
+            corner_bl,
+            border_char.repeat(box_width - 2),
+            corner_br
+        ));
         self.output_history.push(String::new()); // Empty line after box
-        // Auto-scroll to bottom only if user hasn't manually scrolled
+                                                 // Auto-scroll to bottom only if user hasn't manually scrolled
         if !self.manual_scroll {
             let total_lines = self.output_history.len();
             let visible_height = self.last_visible_height.max(1);
@@ -279,7 +300,7 @@ impl RetroTui {
                         state.cursor_blink = !state.cursor_blink;
                         state.last_blink = Instant::now();
                     }
-                    
+
                     // Update status blink only if status is "PROCESSING"
                     if state.status_line == "PROCESSING" {
                         if state.last_status_blink.elapsed() > Duration::from_millis(500) {
@@ -391,14 +412,15 @@ impl RetroTui {
         // Calculate visible lines
         let visible_height = area.height.saturating_sub(2) as usize; // Account for borders
         let total_lines = output_history.len();
-        
+
         // Calculate the maximum valid scroll position to ensure we can see all lines
         // The max scroll should allow us to position the viewport such that the last line is visible
         let max_scroll = total_lines.saturating_sub(1);
-        
+
         // Ensure scroll offset is within valid range
         // Clamp the scroll offset but ensure we can still see content at the bottom
-        let scroll = if scroll_offset + visible_height > total_lines && total_lines > visible_height {
+        let scroll = if scroll_offset + visible_height > total_lines && total_lines > visible_height
+        {
             // Adjust scroll to show the last visible_height lines
             total_lines.saturating_sub(visible_height)
         } else {
@@ -424,10 +446,17 @@ impl RetroTui {
                             .add_modifier(Modifier::BOLD),
                     ));
                 }
-                
+
                 // Check if this is a box border line
-                if line.starts_with("┌") || line.starts_with("└") || line.starts_with("│") || line.starts_with("├") {
-                    return Line::from(Span::styled(format!(" {}", line), Style::default().fg(TERMINAL_DIM_GREEN)));
+                if line.starts_with("┌")
+                    || line.starts_with("└")
+                    || line.starts_with("│")
+                    || line.starts_with("├")
+                {
+                    return Line::from(Span::styled(
+                        format!(" {}", line),
+                        Style::default().fg(TERMINAL_DIM_GREEN),
+                    ));
                 }
                 // Apply different colors based on content
                 let style = if line.starts_with("ERROR:") {
@@ -583,7 +612,10 @@ impl RetroTui {
 
     /// Send tool output to the terminal
     pub fn tool_output(&self, name: &str, content: &str) {
-        let _ = self.tx.send(TuiMessage::ToolOutput { name: name.to_string(), content: content.to_string() });
+        let _ = self.tx.send(TuiMessage::ToolOutput {
+            name: name.to_string(),
+            content: content.to_string(),
+        });
     }
 
     /// Update system status
@@ -639,7 +671,7 @@ impl RetroTui {
             state.manual_scroll = true;
             let total_lines = state.output_history.len();
             let visible_height = state.last_visible_height.max(1);
-            
+
             // Calculate max scroll position - should position viewport to show last lines
             let max_scroll = if total_lines > visible_height {
                 total_lines.saturating_sub(visible_height)
@@ -660,7 +692,7 @@ impl RetroTui {
             } else {
                 15 // Reasonable default
             };
-            
+
             if state.scroll_offset > 0 {
                 // Scroll up by a page worth of lines
                 state.scroll_offset = state.scroll_offset.saturating_sub(page_size);
@@ -678,7 +710,7 @@ impl RetroTui {
             } else {
                 15 // Reasonable default
             };
-            
+
             // Calculate max scroll position - should position viewport to show last lines
             let visible_height = state.last_visible_height.max(1);
             let max_scroll = if total_lines > visible_height {
@@ -686,7 +718,7 @@ impl RetroTui {
             } else {
                 0
             };
-            
+
             // Scroll down by a page, but don't go past the end
             state.scroll_offset = (state.scroll_offset + page_size).min(max_scroll);
         }
